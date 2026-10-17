@@ -1,0 +1,50 @@
+# Self-hosting sketch, next to a relay and Valkey on the external Docker network
+# `relay-network` (`docker network create relay-network`; the relay and Valkey
+# containers must be reachable on it as `relay` and `valkey`). Production deploys
+# go through .github/workflows/mcp.yml instead.
+# Build prerequisite: scripts/vendor-local-deps.sh (see Dockerfile).
+services:
+  mcp:
+    build: .
+    ports:
+      # Loopback only: the host's nginx terminates TLS and is the single proxy.
+      - "127.0.0.1:3100:3100"
+      - "127.0.0.1:9100:9100"
+    environment:
+      NODE_ENV: production
+      PORT: "3100"
+      # The Redis URL (it carries the Valkey password, if any) is read from a file too, like the KEK.
+      # Never put a secret on the command line (shell history, `ps`): write the file with an
+      # editor, or type the URL into a here-doc, and percent-encode the password inside the URL
+      # (`@` -> %40, `:` -> %3A, `/` -> %2F, `%` -> %25, ...):
+      #   (umask 077; cat > /etc/ace-mcp/mcp.redis-url) <<'EOF'
+      #   redis://:<percent-encoded password>@valkey:6379/2
+      #   EOF
+      #   chown 1000:1000 /etc/ace-mcp/mcp.redis-url && chmod 0400 /etc/ace-mcp/mcp.redis-url
+      REDIS_URL_FILE: /run/secrets/redis_url
+      RELAY_URL: http://relay:3000
+      PUBLIC_RELAY_URL: https://relay.aceprotocol.org
+      ALLOWED_HOSTS: mcp.aceprotocol.org
+      # Host nginx reaches the container through Docker's port proxy, i.e. from the
+      # relay-network bridge gateway. Trust loopback plus exactly that IP:
+      #   docker network inspect relay-network -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+      # (use the IPv4 address from that list)
+      # Never `uniquelocal`: every container on the network could then spoof
+      # X-Forwarded-For and defeat every per-IP limit. IP/CIDR only; hop counts are refused.
+      TRUST_PROXY: "loopback,${RELAY_NETWORK_GATEWAY:?set RELAY_NETWORK_GATEWAY to the relay-network gateway IP}"
+      # The KEK is read from a file, not the environment (it would show in `docker inspect`);
+      # generate it straight into the file as below, never paste it on a command line.
+      # Host file: the Base64 of 32 random bytes, owned by uid 1000 (the image's `node`
+      # user) with mode 0400 in a root-owned 0700 directory — the service refuses a
+      # group/world-readable file:
+      #   (umask 077; openssl rand -base64 32 > /etc/ace-mcp/mcp.kek)
+      #   chown 1000:1000 /etc/ace-mcp/mcp.kek && chmod 0400 /etc/ace-mcp/mcp.kek
+      MCP_KEK_FILE: /run/secrets/mcp_kek
+    volumes:
+      - ${MCP_KEK_HOST_FILE:?set MCP_KEK_HOST_FILE to the host path of the KEK file}:/run/secrets/mcp_kek:ro
+      - ${REDIS_URL_HOST_FILE:?set REDIS_URL_HOST_FILE to the host path of the Redis URL file}:/run/secrets/redis_url:ro
+    restart: unless-stopped
+    networks: [relay-network]
+networks:
+  relay-network:
+    external: true
