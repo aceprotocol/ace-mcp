@@ -5,7 +5,7 @@ import { provisionIdentity } from '../../src/identity/provision.js';
 import { defaultSettings, hostedCard, loadSettings } from '../../src/agent/settings.js';
 import { identityKeys } from '../../src/store/keyspace.js';
 import { connect, createIdentity, startListening, type McpTestClient } from '../helpers/client.js';
-import { sha256Hex } from '@ace-protocol/sdk';
+import { canonicalStateBytes, sha256Hex } from '@ace-protocol/sdk';
 
 const MANIFEST: ProfileManifest = {
   id: 'example:weather:1',
@@ -17,11 +17,29 @@ beforeAll(async () => { stack = await createStack(49); url = await startListenin
 afterAll(() => stack?.close());
 
 describe('hosted settings', () => {
-  it('defaults to private text-only with the hosted tag; validates the card name and tag count', () => {
-    expect(defaultSettings('Agent')).toMatchObject({ visibility: 'private', card: { name: 'Agent', tags: ['hosted'] }, profiles: ['text'], manifests: [], acceptProfiles: [] });
+  it('defaults to closed, unlisted, text-only with the hosted tag; validates the card name and tag count', () => {
+    expect(defaultSettings('Agent')).toEqual({ contact: 'closed', listed: false, card: { name: 'Agent', tags: ['hosted'] }, profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] });
     expect(() => defaultSettings('')).toThrow();
     expect(() => defaultSettings('bad\u0000name')).toThrow();
     expect(() => hostedCard({ name: 'A', tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
+  });
+
+  it('reads settings saved before card records: public is contact open + listed, private is closed + unlisted', async () => {
+    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Legacy' }, '127.0.0.1');
+    const aceId = identity.getACEId();
+    const read = (legacy: Record<string, unknown>) => stack.service.runtime.withIdentity(aceId, undefined, async (c) => {
+      const { contact: _c, listed: _l, ...base } = (await loadSettings(c.store))!;
+      await c.store.write('mcp/settings.json', canonicalStateBytes({ ...base, ...legacy } as never));
+      return loadSettings(c.store);
+    });
+    const pub = await read({ visibility: 'public', handle: 'legacy' });
+    expect(pub).toMatchObject({ contact: 'open', listed: true, handle: 'legacy' });
+    expect(pub).not.toHaveProperty('visibility');
+    expect(pub).not.toHaveProperty('handleHome'); // not locked until a publish at the home succeeds
+    const priv = await read({ visibility: 'private' });
+    expect(priv).toMatchObject({ contact: 'closed', listed: false });
+    expect(priv).not.toHaveProperty('visibility');
+    expect(await read({})).toMatchObject({ contact: 'closed', listed: false });
   });
 
   it('settings not saved when publish rejected (the SDK descriptor rules are the only check)', async () => {
@@ -29,7 +47,8 @@ describe('hosted settings', () => {
     const aceId = identity.getACEId();
     const saved = await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store));
     const refused = [
-      { ...saved!, handle: 'alice' }, // a handle needs public visibility
+      { ...saved!, handle: 'Not A Handle' }, // the handle grammar
+      { ...saved!, pay: ['not-caip10'] }, // card record rules
       { ...saved!, acceptProfiles: ['ace:commerce:1'] }, // not installed
       { ...saved!, ext: { 'ace:commerce:1': { settlement: [{ method: 'stripe-link' }] } } }, // ext of an uninstalled profile
       { ...saved!, profiles: ['text', 'commerce'] as const, ext: { 'ace:commerce:1': { settlement: [{ method: 'cash' }] } } },
@@ -50,23 +69,23 @@ describe('hosted settings', () => {
       stack.relay.route = route;
     }
     expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toEqual(saved);
-    expect(stack.relay.descriptors.get(aceId)!.descriptor.card.name).toBe('Strict');
+    expect(stack.relay.cards.get(aceId)!.card.card.name).toBe('Strict');
     // A valid change publishes, then saves.
-    await stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, visibility: 'public', handle: 'strict' })));
-    expect((await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store)))?.handle).toBe('strict');
-    expect(stack.relay.descriptors.get(aceId)!.descriptor.handle).toBe('strict');
+    await stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, contact: 'open', handle: 'strict' })));
+    expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toMatchObject({ handle: 'strict', handleHome: 'https://relay.test', contact: 'open' });
+    expect(stack.relay.cards.get(aceId)!.card).toMatchObject({ handle: 'strict', contact: 'open' });
   });
 });
 
 describe('concurrent settings changes', () => {
   /**
-   * A configure-only client (no ace:admission) whose call loaded the identity while it was public and auto-accepting,
-   * racing the owner who tightens it to private with no auto-accept: the owner's change lands between the client's
+   * A configure-only client (no ace:admission) whose call loaded the identity while it was open, listed and
+   * auto-accepting, racing the owner who tightens it to closed, unlisted with no auto-accept: the owner's change lands between the client's
    * load and its write. `vault.load` is held for the client's call only (its settings snapshot is read alongside it).
    */
   async function race(clientArgs: Record<string, unknown>) {
     const agent = await createIdentity(stack.service, url, 'Racer');
-    await agent.ownerOk('configure', { visibility: 'public', acceptProfiles: ['ace:text:1'] });
+    await agent.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
     const client: McpTestClient = await connect(url, (await stack.service.grants.create({
       aceId: agent.aceId, ownerHash: sha256Hex(agent.token), clientId: 'c', resource: url, scopes: ['ace:read', 'ace:configure'],
     })).access_token);
@@ -84,11 +103,11 @@ describe('concurrent settings changes', () => {
     try {
       const pending = client.call('ace_configure', clientArgs);
       await clientLoaded;
-      await agent.ownerOk('configure', { visibility: 'private', acceptProfiles: [] });
+      await agent.ownerOk('configure', { contact: 'closed', listed: false, acceptProfiles: [] });
       release();
       const result = await pending;
       const saved = await stack.service.runtime.withIdentity(agent.aceId, undefined, (c) => loadSettings(c.store));
-      return { result, saved: saved!, published: stack.relay.descriptors.get(agent.aceId)!.descriptor };
+      return { result, saved: saved!, published: stack.relay.cards.get(agent.aceId)!.card };
     } finally {
       vault.load = load;
       await client.close(); await agent.client.close();
@@ -98,14 +117,14 @@ describe('concurrent settings changes', () => {
   it('a rename-only change merges onto the fresh settings and never restores what the owner tightened', async () => {
     const { result, saved, published } = await race({ card: { name: 'Renamed' } });
     expect(result.ok).toBe(true);
-    expect(saved).toMatchObject({ visibility: 'private', acceptProfiles: [], card: { name: 'Renamed' } });
-    expect(published).toMatchObject({ visibility: 'private', card: { name: 'Renamed' } });
+    expect(saved).toMatchObject({ contact: 'closed', listed: false, acceptProfiles: [], card: { name: 'Renamed' } });
+    expect(published).toMatchObject({ contact: 'closed', listed: false, card: { name: 'Renamed' } });
   });
 
-  it('the admission check runs against the fresh settings: re-sending the stale public state needs ace:admission', async () => {
-    const { result, saved } = await race({ visibility: 'public', acceptProfiles: ['ace:text:1'] });
+  it('the admission check runs against the fresh settings: re-sending the stale open state needs ace:admission', async () => {
+    const { result, saved } = await race({ contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
     expect(result).toMatchObject({ ok: false, error: 'insufficient_scope' });
-    expect(saved).toMatchObject({ visibility: 'private', acceptProfiles: [] });
+    expect(saved).toMatchObject({ contact: 'closed', listed: false, acceptProfiles: [] });
   });
 
   it('an owner change outwaits a change in flight, and tool changes stand aside while it waits', async () => {

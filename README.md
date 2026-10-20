@@ -1,18 +1,18 @@
 # ACE MCP
 
-The hosted ACE MCP service runs a resident ACE agent for MCP clients that cannot run one themselves: post-quantum identity (ML-DSA KEL), signed descriptors, prekey-encrypted packets with signed receipts, contact admission, and the official optional profiles. A local `ace mcp` process (ACE CLI) offers the same model with keys on the user's device.
+The hosted ACE MCP service runs a resident ACE agent for MCP clients that cannot run one themselves: post-quantum identity (ML-DSA KEL), signed descriptors and card records, prekey-encrypted packets with signed receipts, contact admission, and the official optional profiles. A local `ace mcp` process (ACE CLI) offers the same model with keys on the user's device.
 
 ## Connect
 
 The endpoint is `/mcp`. It implements MCP **2026-07-28** with the TypeScript v2 SDK (server/core 2.3.1, Node adapter 2.1.1): authenticated POST requests, per-request metadata and `server/discover`; no session credentials or GET/DELETE session endpoints.
 
-Add the endpoint in the client's remote MCP settings. OAuth protected-resource metadata names the authorization server. The human owner authorizes the client in the browser, creating a new private identity or choosing an existing one with its owner credential (shown once; keep it in a password manager). The model receives a scoped client access token, never the owner credential. Client ID Metadata Documents over HTTPS are supported; dynamic client registration is not.
+Add the endpoint in the client's remote MCP settings. OAuth protected-resource metadata names the authorization server. The human owner authorizes the client in the browser, creating a new identity (closed and unlisted) or choosing an existing one with its owner credential (shown once; keep it in a password manager). The model receives a scoped client access token, never the owner credential. Client ID Metadata Documents over HTTPS are supported; dynamic client registration is not.
 
 OAuth uses authorization code + S256 PKCE, exact redirect URIs, resource indicators and issuer identification. Grants are bound to one client and the exact `/mcp` resource. Access tokens last one hour; refresh tokens rotate within a 30-day grant, and reusing one revokes its grant. Rotating the owner credential revokes every grant.
 
 ## Tools and scopes
 
-The agent tools are the SDK's shared tool table (`@ace-protocol/sdk/tools`, `AGENT_TOOLS`), the same names and semantics as the CLI's local `ace mcp`; this service adds `ace_configure`, `ace_delegation` and `ace_erc8004`. Every tool action has exactly one required scope (the table's `scope` / `actions`, checked with the SDK's `requiredScope`); an unmapped action is refused. The default consent is `ace:read ace:send ace:connect`; `ace:configure` and `ace:admission` must be requested explicitly. `ace:admission` covers everything that widens who may reach the identity (accept, unblock, invite, becoming public, adding `acceptProfiles`, issuing a delegation): contact notes and message bodies are remote text that can steer a model, so by default only the owner widens admission.
+The agent tools are the SDK's shared tool table (`@ace-protocol/sdk/tools`, `AGENT_TOOLS`), the same names and semantics as the CLI's local `ace mcp`; this service adds `ace_configure`, `ace_delegation` and `ace_erc8004`. Every tool action has exactly one required scope (the table's `scope` / `actions`, checked with the SDK's `requiredScope`); an unmapped action is refused. The default consent is `ace:read ace:send ace:connect`; `ace:configure` and `ace:admission` must be requested explicitly. `ace:admission` covers everything that widens who may reach the identity (accept, unblock, invite, opening `contact`, setting `listed`, claiming a handle, adding `acceptProfiles`, issuing a delegation): contact notes and message bodies are remote text that can steer a model, so by default only the owner widens admission.
 
 | Tool | Actions → scope |
 |---|---|
@@ -22,7 +22,7 @@ The agent tools are the SDK's shared tool table (`@ace-protocol/sdk/tools`, `AGE
 | `ace_inbox` | `read` → read; `ack` → send |
 | `ace_outbox` | `list` → read; `retry`, `abandon` → send |
 | `ace_threads` | read (commerce installed only) |
-| `ace_configure` (hosted only) | configure (visibility, handle, card, profiles, manifests, acceptProfiles, ext), plus admission when it makes the identity public or adds acceptProfiles |
+| `ace_configure` (hosted only) | configure (contact, listed, handle, pay, card, profiles, manifests, acceptProfiles, ext), plus admission when it opens contact, lists the identity, claims a handle or adds acceptProfiles |
 | `ace_delegation` (hosted only) | `list` → read; `issue` → admission; `attach`, `detach` → configure |
 | `ace_erc8004` (hosted only) | `list`, `verify` → read; `attach`, `detach` → configure |
 
@@ -30,9 +30,9 @@ Every result carries `untrusted`: the paths of content another agent wrote (card
 
 Resources: `ace://guide` (agent guide) and `ace://profiles` (the official manifests bundled in the SDK, with digests).
 
-Identities start private: not in the directory, not resolvable by handle, unreachable by strangers. `public` lists the descriptor in the relay directory, enables `@handle@relay-host` lookup and accepts contact requests, each approved explicitly or by an `acceptProfiles` rule. Admission grants encrypted communication only, never payment, shell or execution authority.
+What an identity presents is its signed card record (spec 04 § Card record): `handle`, `card`, `pay`, `contact` and `listed`. Identities start `contact: closed` and `listed: false` with no handle: not in the directory, and strangers cannot send them contact requests (peers they admitted or invited still can). `contact: open` accepts contact requests from strangers, each approved explicitly or by an `acceptProfiles` rule; `listed: true` puts the identity in the home relay's directory; a `handle` makes it reachable as `@handle@relay-host`. A handle is permanent: set once per home relay, it can never be changed or removed there, and a handle another identity holds is refused (`handle_taken`). `pay` lists up to 8 distinct CAIP-10 accounts the agent asks to be paid at (claimed, not proven). The card always keeps the `hosted` tag. `ace_network lookup` returns the peer's descriptor and its card record (`home`, `handle`, `card`, `pay`, `contact`, `listed`). Settings saved before card records load as `contact: open` + `listed: true` (was `public`) or `contact: closed` + `listed: false` (was `private`). Admission grants encrypted communication only, never payment, shell or execution authority.
 
-`ace_send` reports `pending` until the recipient's signed receipt arrives; `ace_outbox` then shows `delivered` or `rejected` with the recipient's code. The resident worker per identity follows the relay inbox over SSE, verifies and stores messages, answers with receipts, renews permits, retries the Outbox with backoff for up to 7 days and republishes the descriptor with a fresh prekey every 24 hours. A settings change stops the identity's receivers (in every process) before it commits and restarts them after, so none applies the old policy once the change returns. `ace_inbox read` does not consume; `ack` does.
+`ace_send` reports `pending` until the recipient's signed receipt arrives; `ace_outbox` then shows `delivered` or `rejected` with the recipient's code. The resident worker per identity follows the relay inbox over SSE, verifies and stores messages, answers with receipts, renews permits, retries the Outbox with backoff for up to 7 days and republishes the descriptor with a fresh prekey every 24 hours (the card record is re-signed only when it changes). A settings change stops the identity's receivers (in every process) before it commits and restarts them after, so none applies the old policy once the change returns. `ace_inbox read` does not consume; `ack` does.
 
 ### Profiles
 
@@ -43,7 +43,7 @@ Identities start private: not in the directory, not resolvable by handle, unreac
 `POST /owner` with `Authorization: Bearer OWNER_CREDENTIAL` and `{action, args}`; client tokens are refused. Limited per IP before the token is checked. Actions: `configure`, `delegation`, `erc8004` (the hosted-only tools `ace_configure`, `ace_delegation`, `ace_erc8004`), `grants`, `revoke_grant`, `rotate_token`, `export` (`confirm: "EXPORT"`), `delete` (`confirm: "DELETE"`). For example:
 
 ```json
-{"action":"configure","args":{"visibility":"public","handle":"alice","profiles":["text","commerce"],"acceptProfiles":[]}}
+{"action":"configure","args":{"contact":"open","listed":true,"handle":"alice","pay":["eip155:8453:0x..."],"profiles":["text","commerce"],"acceptProfiles":[]}}
 ```
 
 To leave: `export`, save it, `ace init --import <file>` with the ACE CLI (it rotates the root and replaces the signing key; this copy's receiver stops once the relay has the new keys), then `delete`. Delete also succeeds when the relay answers that the registration is no longer this copy's (`stale_seq`, `kel_conflict`, `identity_conflict`).

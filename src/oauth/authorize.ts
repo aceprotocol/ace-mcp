@@ -135,7 +135,7 @@ function consentPage(reply: FastifyReply, v: Validated, nonce: string): FastifyR
   const hidden = `${hiddenFields(v.carried)}\n<input type="hidden" name="form_nonce" value="${escapeHtml(nonce)}">`;
   return sendHtml(reply, 200, 'Connect to ACE', `<h1>Connect to ACE</h1>
 <h2 class="dest">Authorize scoped access for <code>${host}</code></h2>
-<p>${who} Requested permissions: <code>${escapeHtml(v.carried.get('scope') ?? '')}</code>. This service holds the identity keys and can read its messages. This client cannot export keys or delete the identity; only the <code>ace:configure</code> scope lets it change publication settings, and only <code>ace:admission</code> lets it accept contacts, unblock peers, issue invitations or make the identity public.</p>
+<p>${who} Requested permissions: <code>${escapeHtml(v.carried.get('scope') ?? '')}</code>. This service holds the identity keys and can read its messages. This client cannot export keys or delete the identity; only the <code>ace:configure</code> scope lets it change publication settings, and only <code>ace:admission</code> lets it accept contacts, unblock peers, issue invitations, open its contact, list it in the directory or claim its handle.</p>
 <section><h2>Create a new ACE identity for this client</h2>
 <form method="post" action="/oauth/authorize">
 ${hidden}
@@ -237,7 +237,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, deps: ProvisionDep
     const params = { code, state: v.state, iss: baseUrl(req) };
     if (!existing) {
       const dest = redirectUrl(v.redirectUri, params);
-      return sendHtml(reply, 200, 'Save your owner credential', `<h1>Identity created privately</h1><p>Save this owner credential in your password manager. It is shown once and is never sent to the client or its model. Use it for owner settings and recovery.</p><code>${escapeHtml(token)}</code><p>ACE ID: ${escapeHtml(aceId)}</p><p><a href="${escapeHtml(dest)}">Continue to the client</a></p>`);
+      return sendHtml(reply, 200, 'Save your owner credential', `<h1>Identity created</h1><p>It starts closed and unlisted: no handle, not in the directory, and strangers cannot reach it.</p><p>Save this owner credential in your password manager. It is shown once and is never sent to the client or its model. Use it for owner settings and recovery.</p><code>${escapeHtml(token)}</code><p>ACE ID: ${escapeHtml(aceId)}</p><p><a href="${escapeHtml(dest)}">Continue to the client</a></p>`);
     }
     return redirectTo(reply, v.redirectUri, params);
   });

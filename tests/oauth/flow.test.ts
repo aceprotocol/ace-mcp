@@ -67,12 +67,13 @@ describe('CIMD and OAuth 2.1 consent', () => {
     expect(p.response.headers.get('x-frame-options')).toBe('DENY');
     expect(p.response.headers.get('cache-control')).toBe('no-store'); expect(p.html).not.toContain('<script');
   });
-  it('creates a private identity and gives each client expiring credentials distinct from the owner', async () => {
+  it('creates a closed, unlisted identity and gives each client expiring credentials distinct from the owner', async () => {
     const { owner, exchange } = await authorize();
     const id = await app.vault.resolveToken(owner); expect(id).toBeTruthy();
-    // Registered and published, but private: not resolvable anonymously.
-    expect(stack.relay.descriptors.get(id!)?.descriptor).toMatchObject({ visibility: 'private', card: { name: 'Private agent', tags: ['hosted'] } });
-    expect((await stack.relay.fetch(`https://relay.test/v1/descriptor/${encodeURIComponent(id!)}`)).status).toBe(404);
+    // Registered and published, but closed and unlisted: no stranger contact requests, not in the directory.
+    expect(stack.relay.cards.get(id!)?.card).toMatchObject({ contact: 'closed', listed: false, card: { name: 'Private agent', tags: ['hosted'] } });
+    expect(stack.relay.cards.get(id!)?.card.handle).toBeUndefined();
+    expect(await (await stack.relay.fetch('https://relay.test/v1/descriptors')).json()).toEqual({ agents: [], cursor: null });
     const response = await token(exchange); expect(response.status).toBe(200);
     const credentials = await response.json() as Record<string, unknown>;
     expect(credentials).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'ace:read ace:send ace:connect' });
