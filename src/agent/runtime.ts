@@ -343,13 +343,14 @@ export class AgentRuntime {
         try {
           const stopped = await this.#takeReceive(aceId, store);
           try {
-            const next = change(await loadSettings(store) ?? settings);
+            const current = await loadSettings(store) ?? settings;
+            const next = change(current);
             const card = hostedCard(next.card);
             const client = await track(this.open(identity, store, relay, { ...next, card }, 'send'));
             try {
               await client.publish({ force: true });
             } catch (e) {
-              throw explainRefusal(e, next, relay.baseUrl);
+              throw explainRefusal(e, next, relay.baseUrl, current);
             }
             const s = publishedAt({ ...next, card }, relay.baseUrl);
             await saveSettings(store, s); // fenced by both locks: lands only while this call still holds them

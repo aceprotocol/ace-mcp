@@ -4,7 +4,7 @@ import { connect, createIdentity, startListening, type HostedTestAgent, type Mcp
 import { AGENT_TOOLS } from '@ace-protocol/sdk/tools';
 import { scopeOf } from '../../src/mcp/tools/shared.js';
 import { TOOLS } from '../../src/mcp/server.js';
-import { sha256Hex } from '@ace-protocol/sdk';
+import { ACEError, sha256Hex } from '@ace-protocol/sdk';
 import { DEFAULT_SCOPES } from '../../src/oauth/grants.js';
 import { loadSettings, saveSettings } from '../../src/agent/settings.js';
 
@@ -144,19 +144,45 @@ describe('scope map (D12)', () => {
     } finally { await configurer.close(); await fresh.client.close(); await other.client.close(); }
   });
 
-  it('pay: CAIP-10 accounts, at most 8, distinct; [] clears; changing it needs only ace:configure', async () => {
+  it('pay: CAIP-10 accounts, at most 8, distinct; [] clears; any change of the set needs ace:admission', async () => {
     const acct = (i: number) => `eip155:8453:0x${i.toString(16).padStart(40, '0')}`;
     const configurer = await connect(url, (await stack.service.grants.create({ aceId: agent.aceId, ownerHash: sha256Hex(agent.token), clientId: 'c', resource: url, scopes: [...DEFAULT_SCOPES, 'ace:configure'] })).access_token);
+    const denied = { ok: false, error: 'insufficient_scope' };
     try {
+      // Arguments are validated before the scope check.
       for (const pay of [['not-an-account'], [acct(1), acct(1)], Array.from({ length: 9 }, (_, i) => acct(i + 1)), ['eip155:8453:0xabc'.padEnd(200, 'f')]]) {
         expect(await configurer.call('ace_configure', { pay }), JSON.stringify(pay)).toMatchObject({ ok: false, error: 'invalid_argument' });
       }
       const pay = Array.from({ length: 8 }, (_, i) => acct(i + 1));
-      expect((await configurer.callOk('ace_configure', { pay })).pay).toEqual(pay);
+      // Adding accounts (from none) is gated for a configure-only client; the admission-holding client may.
+      expect(await configurer.call('ace_configure', { pay })).toMatchObject(denied);
+      expect(stack.relay.cards.get(agent.aceId)!.card.pay).toBeUndefined();
+      expect((await agent.client.callOk('ace_configure', { pay })).pay).toEqual(pay);
       expect(stack.relay.cards.get(agent.aceId)!.card.pay).toEqual(pay);
-      expect(await configurer.callOk('ace_configure', { pay: [] })).not.toHaveProperty('pay');
+      // The same set in another order is no change: not gated.
+      expect((await configurer.callOk('ace_configure', { pay: [...pay].reverse(), card: { name: 'Scoped' } })).card.name).toBe('Scoped');
+      // Replacing, removing or clearing an account is gated.
+      for (const next of [[...pay.slice(1), acct(99)], pay.slice(1), []]) {
+        expect(await configurer.call('ace_configure', { pay: next }), JSON.stringify(next)).toMatchObject(denied);
+      }
+      expect(new Set(stack.relay.cards.get(agent.aceId)!.card.pay)).toEqual(new Set(pay));
+      expect(await agent.client.callOk('ace_configure', { pay: [] })).not.toHaveProperty('pay');
       expect(stack.relay.cards.get(agent.aceId)!.card.pay).toBeUndefined();
     } finally { await configurer.close(); }
+  });
+
+  it('a relay invalid_argument without any handle involved comes back as the relay said, without the set-once text', async () => {
+    const plain = await createIdentity(stack.service, url, 'Plain');
+    const route = stack.relay.route.bind(stack.relay);
+    stack.relay.route = async (method, u, headers, body) => {
+      if (u.pathname === '/v1/card' && method === 'POST') throw new ACEError('invalid_argument', 'refused');
+      return route(method, u, headers, body);
+    };
+    try {
+      const r = await plain.owner('configure', { card: { name: 'Plain 2' } });
+      expect(r).toMatchObject({ ok: false, error: 'relay_rejected' });
+      expect((r as { message: string }).message).not.toMatch(/set once/);
+    } finally { stack.relay.route = route; await plain.client.close(); }
   });
 
   it('the hosted card tag is enforced on the published card record', async () => {

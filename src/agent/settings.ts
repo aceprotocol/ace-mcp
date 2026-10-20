@@ -83,16 +83,17 @@ export function publishedAt(s: HostedSettings, home: string): HostedSettings {
 
 /**
  * A publish the relay refused, explained (the relay's code becomes the error code): a handle another identity holds
- * (`handle_taken`), or a card record without the handle this identity already holds at that relay (`invalid_argument`).
+ * (`handle_taken`), or a card record without the handle this identity already holds at that relay (`invalid_argument`,
+ * explained only when `s` carries a handle or `previous` had one; otherwise the relay's answer stands as is).
  */
-export function explainRefusal(err: unknown, s: HostedSettings, home: string): unknown {
+export function explainRefusal(err: unknown, s: HostedSettings, home: string, previous?: HostedSettings | null): unknown {
   if (!(err instanceof ACEError) || err.code !== 'relay_rejected') return err;
   const host = new URL(home).host;
   const opts = { cause: err, ...(err.status !== undefined ? { status: err.status } : {}), relayCode: err.relayCode };
   if (err.relayCode === 'handle_taken' && s.handle) {
     return new ACEError('handle_taken' as ACEErrorCode, `@${s.handle}@${host} belongs to another identity; choose another handle`, opts);
   }
-  if (err.relayCode === 'invalid_argument') {
+  if (err.relayCode === 'invalid_argument' && (s.handle !== undefined || previous?.handle !== undefined)) {
     return new ACEError('invalid_argument', `${home} refused the card record (${err.detail}): ${HANDLE_SET_ONCE}. `
       + 'If this identity already holds a handle there, configure exactly that one', opts);
   }

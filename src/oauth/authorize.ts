@@ -135,7 +135,7 @@ function consentPage(reply: FastifyReply, v: Validated, nonce: string): FastifyR
   const hidden = `${hiddenFields(v.carried)}\n<input type="hidden" name="form_nonce" value="${escapeHtml(nonce)}">`;
   return sendHtml(reply, 200, 'Connect to ACE', `<h1>Connect to ACE</h1>
 <h2 class="dest">Authorize scoped access for <code>${host}</code></h2>
-<p>${who} Requested permissions: <code>${escapeHtml(v.carried.get('scope') ?? '')}</code>. This service holds the identity keys and can read its messages. This client cannot export keys or delete the identity; only the <code>ace:configure</code> scope lets it change publication settings, and only <code>ace:admission</code> lets it accept contacts, unblock peers, issue invitations, open its contact, list it in the directory or claim its handle.</p>
+<p>${who} Requested permissions: <code>${escapeHtml(v.carried.get('scope') ?? '')}</code>. This service holds the identity keys and can read its messages. This client cannot export keys or delete the identity; only the <code>ace:configure</code> scope lets it change publication settings, and only <code>ace:admission</code> lets it accept contacts, unblock peers, issue invitations, open its contact, list it in the directory, claim its handle or change its payment accounts.</p>
 <section><h2>Create a new ACE identity for this client</h2>
 <form method="post" action="/oauth/authorize">
 ${hidden}

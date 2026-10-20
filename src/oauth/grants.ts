@@ -10,7 +10,8 @@ import { randomOpaque } from '../identity/token.js';
 /**
  * OAuth scopes a client grant can carry (each tool names its `scope` or per-action `actions`). Never defaults: `ace:configure` (publication settings,
  * credentials) and `ace:admission` (anything that widens who may reach this identity: accept, unblock, invite, opening
- * contact, listing in the directory, claiming a handle, acceptProfiles additions, issuing a delegation). Contact notes and message bodies are remote text that
+ * contact, listing in the directory, claiming a handle, acceptProfiles additions, issuing a delegation) plus any change of
+ * the card record's `pay` accounts (redirecting or clearing where the agent asks to be paid). Contact notes and message bodies are remote text that
  * can steer a model, so widening admission stays with the owner unless the owner grants it explicitly.
  */
 export const SCOPES = ['ace:read', 'ace:send', 'ace:connect', 'ace:configure', 'ace:admission'] as const;

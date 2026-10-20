@@ -54,14 +54,22 @@ function merge(s: HostedSettings, a: JSONObject, home: string): HostedSettings {
   return next;
 }
 
+/** Whether two `pay` lists name different account sets (order-insensitive; absent is empty). */
+function payChanged(a: string[] | undefined, b: string[] | undefined): boolean {
+  const x = new Set(a ?? []), y = new Set(b ?? []);
+  return x.size !== y.size || [...x].some((p) => !y.has(p));
+}
+
 /**
- * Whether `next` widens who may reach the identity beyond `current`: opening contact, listing it in the directory,
- * claiming a handle, or auto-accepting another profile.
+ * Whether `next` needs ace:admission beyond `current`: it widens who may reach the identity (opening contact, listing
+ * it in the directory, claiming a handle, auto-accepting another profile), or it changes where the agent asks to be
+ * paid (any change of the `pay` set: redirecting or clearing payee accounts is as sensitive).
  */
-function widens(current: HostedSettings, next: HostedSettings): boolean {
+function needsAdmission(current: HostedSettings, next: HostedSettings): boolean {
   return (next.contact === 'open' && current.contact !== 'open') || (next.listed && !current.listed)
     || (next.handle !== undefined && next.handle !== current.handle)
-    || next.acceptProfiles.some((p) => !current.acceptProfiles.includes(p));
+    || next.acceptProfiles.some((p) => !current.acceptProfiles.includes(p))
+    || payChanged(current.pay, next.pay);
 }
 
 export const hostedTools: HostedTool[] = [
@@ -73,7 +81,7 @@ export const hostedTools: HostedTool[] = [
       `handle: your @name@relay-host address. ${HANDLE_SET_ONCE}.`,
       `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {name, description, image, tags; the "hosted" tag is always kept}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),`,
       'acceptProfiles (auto-accept contact requests for these installed profiles), ext keyed by installed profile ID ({} clears; ace:commerce:1 is {settlement:[{method:"stablecoin",asset:CAIP-19}|{method:"stripe-link"}]}).',
-      'Opening contact, listing, claiming a handle or adding acceptProfiles widens admission and also needs ace:admission. A change the relay or the card record rules refuse is not saved.',
+      'Opening contact, listing, claiming a handle or adding acceptProfiles widens admission, and any change of pay redirects payments: these also need ace:admission. A change the relay or the card record rules refuse is not saved.',
     ].join(' '),
     scope: 'ace:configure',
     inputSchema: closed({
@@ -93,8 +101,8 @@ export const hostedTools: HostedTool[] = [
       // Merged onto, and checked against, the settings as saved when the change lands (not this call's snapshot).
       const s = await c.updateSettings((current) => {
         const next = merge(current, args, home);
-        if (widens(current, next) && !has('ace:admission')) {
-          throw new McpToolError('insufficient_scope', 'Opening contact, listing, claiming a handle or auto-accepting more profiles widens admission: requires ace:admission (or the owner API)', false);
+        if (needsAdmission(current, next) && !has('ace:admission')) {
+          throw new McpToolError('insufficient_scope', 'Opening contact, listing, claiming a handle, auto-accepting more profiles or changing pay accounts requires ace:admission (or the owner API)', false);
         }
         return next;
       });
