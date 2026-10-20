@@ -57,19 +57,26 @@ describe('hosted settings', () => {
     for (const next of refused) {
       await expect(stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings(() => next as never))).rejects.toThrow();
     }
-    // A relay that refuses the descriptor leaves the saved settings unchanged too.
+    // A relay that refuses the card record (posted first) or the descriptor leaves the saved settings unchanged too;
+    // a refused card record leaves the published descriptor unchanged.
     const route = stack.relay.route.bind(stack.relay);
-    stack.relay.route = async (method, u, headers, body) => {
-      if (u.pathname === '/v1/descriptor' && method === 'POST') throw new Error('relay down');
-      return route(method, u, headers, body);
-    };
-    try {
-      await expect(stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ name: 'Renamed' }) })))).rejects.toThrow();
-    } finally {
-      stack.relay.route = route;
+    const descriptorAt = stack.relay.descriptors.get(aceId)!.descriptor.issuedAt;
+    for (const path of ['/v1/card', '/v1/descriptor']) {
+      stack.relay.route = async (method, u, headers, body) => {
+        if (u.pathname === path && method === 'POST') throw new Error('relay down');
+        return route(method, u, headers, body);
+      };
+      try {
+        await expect(stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ name: 'Renamed' }) })))).rejects.toThrow();
+      } finally {
+        stack.relay.route = route;
+      }
+      expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toEqual(saved);
+      if (path === '/v1/card') {
+        expect(stack.relay.cards.get(aceId)!.card.card.name).toBe('Strict');
+        expect(stack.relay.descriptors.get(aceId)!.descriptor.issuedAt).toBe(descriptorAt);
+      }
     }
-    expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toEqual(saved);
-    expect(stack.relay.cards.get(aceId)!.card.card.name).toBe('Strict');
     // A valid change publishes, then saves.
     await stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, contact: 'open', handle: 'strict' })));
     expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toMatchObject({ handle: 'strict', handleHome: 'https://relay.test', contact: 'open' });
