@@ -1,28 +1,49 @@
 /**
- * The hosted-only tools: what this identity publishes (ace_configure), its delegation credentials (ace_delegation)
+ * The hosted-only tools: what this identity publishes in its card record and descriptor (ace_configure), its delegation credentials (ace_delegation)
  * and its ERC-8004 bindings (ace_erc8004). Each change goes through AgentContext.updateSettings as a function of the
  * settings saved at that moment (under the identity's settings lock): published first, saved only when the SDK and
  * the relay accepted it.
  */
 import {
-  ACE_ID_RE, MAX_DELEGATION_LIFETIME, createDelegationCredential, validateErc8004Binding,
+  ACE_ID_RE, MAX_DELEGATION_LIFETIME, MAX_PAY_ACCOUNTS, createDelegationCredential, isHandle, validateErc8004Binding,
   verifyErc8004Registration, type DescriptorDelegation, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 import type { JSONSchema } from '@ace-protocol/sdk/tools';
 import { McpToolError, closed, need, ok, type HostedTool } from './shared.js';
-import { BUNDLED_PROFILES, type BundledProfile, type HostedSettings } from '../../agent/settings.js';
+import { BUNDLED_PROFILES, HANDLE_SET_ONCE, type BundledProfile, type HostedSettings } from '../../agent/settings.js';
 import { nowSeconds } from '../../clock.js';
 
 const ACE_ID: JSONSchema = { type: 'string', pattern: ACE_ID_RE.source, description: 'ACE ID' };
 const OBJECT: JSONSchema = { type: 'object', properties: {}, additionalProperties: true };
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
-/** Apply a configure call to the current settings (omitted fields are kept; `handle: ""` and `ext: {}` clear). */
-function merge(s: HostedSettings, a: JSONObject): HostedSettings {
+/** CAIP-10 account grammar (04 § Card record `pay`). */
+const CAIP10 = '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$';
+const bad = (message: string) => new McpToolError('invalid_argument', message, false);
+
+/**
+ * Apply a configure call to the current settings (omitted fields are kept; `handle: ""`, `pay: []` and `ext: {}`
+ * clear). A handle published at `home` is set once: changing or removing it there is refused before anything is
+ * published (the relay refuses it too).
+ */
+function merge(s: HostedSettings, a: JSONObject, home: string): HostedSettings {
   const next: HostedSettings = { ...s };
-  if (a.visibility !== undefined) next.visibility = a.visibility as HostedSettings['visibility'];
-  if (a.handle === '') delete next.handle; else if (a.handle !== undefined) next.handle = a.handle as string;
-  if (next.visibility === 'private') delete next.handle; // a handle exists only for public agents
+  if (a.handle !== undefined) {
+    const want = a.handle === '' ? undefined : a.handle as string;
+    if (want !== undefined && !isHandle(want)) throw bad('handle must match ^[a-z][a-z0-9_-]{2,31}$');
+    if (s.handle !== undefined && s.handleHome === home && want !== s.handle) {
+      throw bad(`${HANDLE_SET_ONCE}; this identity's handle is @${s.handle}@${new URL(home).host}`);
+    }
+    if (want === undefined) { delete next.handle; delete next.handleHome; } else if (want !== s.handle) { next.handle = want; delete next.handleHome; }
+  }
+  if (a.contact !== undefined) next.contact = a.contact as HostedSettings['contact'];
+  if (a.listed !== undefined) next.listed = a.listed as boolean;
+  if (a.pay !== undefined) {
+    const pay = a.pay as string[];
+    if (pay.length === 0) delete next.pay;
+    else if (new Set(pay).size !== pay.length) throw bad(`pay takes 1-${MAX_PAY_ACCOUNTS} distinct CAIP-10 accounts`);
+    else next.pay = pay;
+  }
   if (a.card !== undefined) next.card = a.card as unknown as HostedSettings['card'];
   if (a.profiles !== undefined) next.profiles = a.profiles as BundledProfile[];
   if (a.manifests !== undefined) next.manifests = a.manifests as unknown as ProfileManifest[];
@@ -33,20 +54,41 @@ function merge(s: HostedSettings, a: JSONObject): HostedSettings {
   return next;
 }
 
+/** Whether two `pay` lists name different account sets (order-insensitive; absent is empty). */
+function payChanged(a: string[] | undefined, b: string[] | undefined): boolean {
+  const x = new Set(a ?? []), y = new Set(b ?? []);
+  return x.size !== y.size || [...x].some((p) => !y.has(p));
+}
+
+/**
+ * Whether `next` needs ace:admission beyond `current`: it widens who may reach the identity (opening contact, listing
+ * it in the directory, claiming a handle, auto-accepting another profile), or it changes where the agent asks to be
+ * paid (any change of the `pay` set: redirecting or clearing payee accounts is as sensitive).
+ */
+function needsAdmission(current: HostedSettings, next: HostedSettings): boolean {
+  return (next.contact === 'open' && current.contact !== 'open') || (next.listed && !current.listed)
+    || (next.handle !== undefined && next.handle !== current.handle)
+    || next.acceptProfiles.some((p) => !current.acceptProfiles.includes(p))
+    || payChanged(current.pay, next.pay);
+}
+
 export const hostedTools: HostedTool[] = [
   {
     name: 'ace_configure',
     description: [
-      'Change what your descriptor publishes, then republish (ace:configure). Omitted fields are kept.',
-      'visibility: public = directory, handle lookup, stranger contact requests; private = reachable only with a permit you issued.',
-      'handle (public only; "" clears), card {name, description, image, tags}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),',
+      'Change what your card record and descriptor publish, then republish (ace:configure). Omitted fields are kept.',
+      'contact: open = strangers may send contact requests; closed (default) = only peers you admitted or invited. listed: true = in the home relay directory (default false).',
+      `handle: your @name@relay-host address. ${HANDLE_SET_ONCE}.`,
+      `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {name, description, image, tags; the "hosted" tag is always kept}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),`,
       'acceptProfiles (auto-accept contact requests for these installed profiles), ext keyed by installed profile ID ({} clears; ace:commerce:1 is {settlement:[{method:"stablecoin",asset:CAIP-19}|{method:"stripe-link"}]}).',
-      'Becoming public or adding acceptProfiles widens admission and also needs ace:admission. A change the descriptor rules refuse is not saved.',
+      'Opening contact, listing, claiming a handle or adding acceptProfiles widens admission, and any change of pay redirects payments: these also need ace:admission. A change the relay or the card record rules refuse is not saved.',
     ].join(' '),
     scope: 'ace:configure',
     inputSchema: closed({
-      visibility: { type: 'string', enum: ['public', 'private'] },
+      contact: { type: 'string', enum: ['open', 'closed'] },
+      listed: { type: 'boolean' },
       handle: { type: 'string', maxLength: 32 },
+      pay: { type: 'array', items: { type: 'string', pattern: CAIP10, maxLength: 178 }, maxItems: MAX_PAY_ACCOUNTS },
       card: OBJECT,
       profiles: { type: 'array', items: { type: 'string', enum: BUNDLED_PROFILES }, maxItems: 2 },
       manifests: { type: 'array', items: OBJECT, maxItems: 16 },
@@ -55,16 +97,18 @@ export const hostedTools: HostedTool[] = [
     }),
     annotations: WRITE,
     async run(args, { c, has }) {
+      const home = c.relay.baseUrl;
       // Merged onto, and checked against, the settings as saved when the change lands (not this call's snapshot).
       const s = await c.updateSettings((current) => {
-        const next = merge(current, args);
-        const widens = (next.visibility === 'public' && current.visibility !== 'public')
-          || next.acceptProfiles.some((p) => !current.acceptProfiles.includes(p));
-        if (widens && !has('ace:admission')) throw new McpToolError('insufficient_scope', 'Making the identity public or auto-accepting more profiles widens admission: requires ace:admission (or the owner API)', false);
+        const next = merge(current, args, home);
+        if (needsAdmission(current, next) && !has('ace:admission')) {
+          throw new McpToolError('insufficient_scope', 'Opening contact, listing, claiming a handle, auto-accepting more profiles or changing pay accounts requires ace:admission (or the owner API)', false);
+        }
         return next;
       });
       return ok({
-        status: 'published', visibility: s.visibility, ...(s.handle ? { handle: s.handle } : {}), card: s.card,
+        status: 'published', ...(s.handle ? { handle: s.handle, address: `@${s.handle}@${new URL(home).host}` } : {}), card: s.card,
+        ...(s.pay ? { pay: s.pay } : {}), contact: s.contact, listed: s.listed,
         profiles: (await c.network()).profiles.descriptors(), acceptProfiles: s.acceptProfiles, ...(s.ext ? { ext: s.ext } : {}),
       });
     },

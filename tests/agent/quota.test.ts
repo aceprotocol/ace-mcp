@@ -15,7 +15,7 @@ beforeAll(async () => {
   alice = await createIdentity(stack.service, url, 'Alice');
   bob = await createIdentity(stack.service, url, 'Bob');
   // Contact through Alice's acceptProfiles rule, on the tool-call receive path.
-  await alice.ownerOk('configure', { visibility: 'public', acceptProfiles: ['ace:text:1'] });
+  await alice.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
   await bob.client.callOk('ace_network', { action: 'connect', peer: alice.aceId });
   await alice.client.callOk('ace_inbox', {});
   await bob.client.callOk('ace_inbox', {});

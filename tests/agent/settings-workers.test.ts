@@ -19,7 +19,7 @@ afterAll(async () => {
 
 describe('a settings change and the resident receiver', () => {
   it('no contact request is auto-accepted under the old policy once configure returns', async () => {
-    await alice.ownerOk('configure', { visibility: 'public', acceptProfiles: ['ace:text:1'] });
+    await alice.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
     // Long upkeep: the receiver's own periodic settings check cannot be what restarts it.
     const workers = new AgentWorkers(stack.service.runtime, stack.service.vault, silent, { scanMs: 50, maintainMs: 60_000 });
     workers.start();

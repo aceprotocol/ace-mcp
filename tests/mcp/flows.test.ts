@@ -23,25 +23,32 @@ const outboxStatus = async (a: HostedTestAgent, messageId: string) =>
   ((await a.client.callOk('ace_outbox', { action: 'list' })).messages as Array<{ messageId: string; status: string; code?: string }>).find((m) => m.messageId === messageId);
 
 describe('two hosted identities through the relay (tool-call receive path)', () => {
-  it('starts private: not in the directory, not resolvable by handle', async () => {
+  it('starts closed and unlisted: not in the directory, no handle, strangers cannot send', async () => {
     const me = await alice.client.callOk('ace_identity');
-    expect(me).toMatchObject({ aceId: alice.aceId, visibility: 'private', custody: 'hosted', card: { name: 'Alice', tags: ['hosted'] } });
+    expect(me).toMatchObject({ aceId: alice.aceId, contact: 'closed', listed: false, custody: 'hosted', card: { name: 'Alice', tags: ['hosted'] } });
+    expect(me).not.toHaveProperty('handle');
     expect(me.profiles.map((p: { id: string }) => p.id)).toEqual(['ace:core:1', 'ace:text:1']);
     expect((await bob.client.callOk('ace_network', { action: 'discover' })).agents).toEqual([]);
-    expect(stack.relay.descriptors.get(alice.aceId)?.descriptor.visibility).toBe('private');
+    expect(stack.relay.cards.get(alice.aceId)?.card).toMatchObject({ contact: 'closed', listed: false });
+    expect(await bob.client.call('ace_network', { action: 'connect', peer: alice.aceId })).toMatchObject({ ok: false, error: 'not_permitted' });
   });
 
   it('contact request, explicit accept, send, inbox read + ack, and the receipt marks the send delivered', async () => {
-    await alice.ownerOk('configure', { visibility: 'public', handle: 'alice', card: { name: 'Alice', description: 'Answers questions' } });
+    const pay = ['eip155:8453:0x00000000000000000000000000000000000000a1', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv'];
+    expect(await alice.ownerOk('configure', { contact: 'open', listed: true, handle: 'alice', pay, card: { name: 'Alice', description: 'Answers questions' } }))
+      .toMatchObject({ status: 'published', handle: 'alice', address: '@alice@relay.test', pay, contact: 'open', listed: true, card: { tags: ['hosted'] } });
     const found = await bob.client.callOk('ace_network', { action: 'discover', profile: 'ace:text:1' });
     expect(found.agents.map((a: { aceId: string }) => a.aceId)).toEqual([alice.aceId]);
-    expect(found.agents[0]).toMatchObject({ handle: 'alice', card: { description: 'Answers questions', tags: ['hosted'] } });
-    expect((await bob.client.callOk('ace_network', { action: 'lookup', peer: '@alice@relay.test' })).agent.aceId).toBe(alice.aceId);
+    const looked = await bob.client.callOk('ace_network', { action: 'lookup', peer: '@alice@relay.test' });
+    expect(looked.agent.aceId).toBe(alice.aceId);
+    expect(looked.card).toEqual({ home: 'https://relay.test', handle: 'alice', card: { name: 'Alice', description: 'Answers questions', tags: ['hosted'] }, pay, contact: 'open', listed: true });
+    expect(looked.untrusted).toContain('card');
+    expect((await bob.client.callOk('ace_network', { action: 'lookup', peer: alice.aceId })).card).toMatchObject({ handle: 'alice', contact: 'open' });
 
     expect(await bob.client.callOk('ace_network', { action: 'connect', peer: alice.aceId, note: 'hello from bob' })).toMatchObject({ status: 'pending', profile: 'ace:text:1' });
     expect((await alice.client.callOk('ace_inbox', {})).messages).toEqual([]); // processes the contact packet
     const { requests } = await alice.client.callOk('ace_network', { action: 'requests' });
-    expect(requests).toMatchObject([{ from: bob.aceId, profile: 'ace:text:1', note: 'hello from bob', agent: { card: { name: 'Bob' } } }]);
+    expect(requests).toMatchObject([{ from: bob.aceId, profile: 'ace:text:1', note: 'hello from bob', agent: { aceId: bob.aceId } }]);
     await alice.client.callOk('ace_network', { action: 'accept', peer: bob.aceId });
     await bob.client.callOk('ace_inbox', {}); // processes `accepted`
     expect((await bob.client.callOk('ace_network', { action: 'peers' })).peers).toMatchObject([{ aceId: alice.aceId, status: 'admitted', canSend: true }]);
@@ -64,7 +71,7 @@ describe('two hosted identities through the relay (tool-call receive path)', () 
     expect(await outboxStatus(alice, reply.messageId)).toMatchObject({ status: 'delivered' });
   });
 
-  it('private pairing: invite admits the invitee; import_invitation never admits; connect completes it', async () => {
+  it('closed pairing: invite admits the invitee; import_invitation never admits; connect completes it', async () => {
     const carol = await createIdentity(stack.service, url, 'Carol');
     const dave = await createIdentity(stack.service, url, 'Dave');
     try {
@@ -74,7 +81,7 @@ describe('two hosted identities through the relay (tool-call receive path)', () 
       expect((await carol.client.callOk('ace_network', { action: 'peers' })).peers).toMatchObject([{ aceId: dave.aceId, status: 'admitted' }]);
       // only the named peer can import it
       expect(await alice.client.call('ace_network', { action: 'import_invitation', invitation: inv.invitation })).toMatchObject({ ok: false, error: 'invalid_authorization' });
-      expect(await dave.client.callOk('ace_network', { action: 'import_invitation', invitation: inv.invitation })).toMatchObject({ agent: { aceId: carol.aceId, visibility: 'private' }, permit: true });
+      expect(await dave.client.callOk('ace_network', { action: 'import_invitation', invitation: inv.invitation })).toMatchObject({ agent: { aceId: carol.aceId }, permit: true });
       expect((await dave.client.callOk('ace_network', { action: 'peers' })).peers).toEqual([]); // never admits
       await dave.client.callOk('ace_network', { action: 'connect', peer: carol.aceId });
       await carol.client.callOk('ace_inbox', {}); // the admitted invitee's request is accepted
@@ -92,6 +99,7 @@ describe('two hosted identities through the relay (tool-call receive path)', () 
     expect(await bob.client.call('ace_send', { to: bob.aceId, type: 'ace:text:1', body: { message: 'me' } })).toMatchObject({ ok: false, error: 'invalid_argument' });
     expect(await bob.client.call('ace_send', { to: alice.aceId, type: 'ace:text:1', body: { wrong: 1 } })).toMatchObject({ ok: false, error: 'invalid_body' });
     expect(await bob.client.call('ace_network', { action: 'discover', visibility: 'public' })).toMatchObject({ ok: false, error: 'invalid_argument' });
+    expect(await bob.client.call('ace_configure', { visibility: 'public' })).toMatchObject({ ok: false, error: 'invalid_argument' }); // replaced by contact / listed
     expect(await bob.client.call('ace_threads', {})).toMatchObject({ ok: false, error: 'invalid_argument' });
   });
 
@@ -156,7 +164,7 @@ describe('resident workers', () => {
 
       // A settings change restarts the receiver with the new policy.
       await alice.ownerOk('configure', { card: { name: 'Alice 2' } });
-      await eventually(async () => stack.relay.descriptors.get(alice.aceId)!.descriptor.card.name === 'Alice 2');
+      await eventually(async () => stack.relay.cards.get(alice.aceId)!.card.card.name === 'Alice 2');
       await eventually(async () => stack.service.runtime.receivers.has(alice.aceId));
 
       // Delete stops the receiver, unregisters and erases everything.

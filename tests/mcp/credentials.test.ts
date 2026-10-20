@@ -27,8 +27,8 @@ describe('ace_delegation', () => {
     expect((await subject.client.callOk('ace_identity')).delegations).toEqual([{ issuer: issuer.aceId, expiresAt }]);
     expect((await subject.client.callOk('ace_delegation', { action: 'list' })).delegations).toMatchObject([{ issuer: issuer.aceId, live: true }]);
 
-    // Others see it after a lookup (the subject is public now).
-    await subject.ownerOk('configure', { visibility: 'public' });
+    // Others see it after a lookup (any registered identity's live descriptor resolves).
+    await subject.ownerOk('configure', { contact: 'open', listed: true });
     const seen = await issuer.client.callOk('ace_network', { action: 'lookup', peer: subject.aceId });
     expect(seen.agent.delegations).toEqual([{ issuer: issuer.aceId, expiresAt }]);
 

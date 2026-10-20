@@ -8,8 +8,8 @@ export type ProvisionDeps = Pick<ToolDeps, 'vault' | 'runtime' | 'rateLimiter' |
 
 /**
  * The one identity-creation flow (owner-approved OAuth `action=create`): per-IP creation limit
- * (IDENTITY_CREATE_RATE_LIMIT per hour), vault.create, private default settings and the first descriptor (whose
- * publish registers the identity at the relay, on behalf of `ip`); the vault record is deleted if any step fails (the
+ * (IDENTITY_CREATE_RATE_LIMIT per hour), vault.create, closed and unlisted default settings and the first descriptor and
+ * card record (whose publish registers the identity at the relay, on behalf of `ip`); the vault record is deleted if any step fails (the
  * token was never shown).
  */
 export async function provisionIdentity(

@@ -10,7 +10,9 @@ import type { IdentityRecord, IdentityVault } from '../identity/vault.js';
 import { deriveSubkey, kekCipher } from '../identity/kek.js';
 import { RedisStore } from '../store/redis-store.js';
 import { RECEIVER_CHANNEL, identityKeys } from '../store/keyspace.js';
-import { defaultSettings, hostedCard, loadSettings, saveSettings, settingsDigest, type HostedSettings } from './settings.js';
+import {
+  defaultSettings, explainRefusal, hostedCard, loadSettings, publishedAt, saveSettings, settingsDigest, type HostedSettings,
+} from './settings.js';
 
 export interface AgentContext {
   aceId: string;
@@ -37,8 +39,10 @@ export interface AgentContext {
    * The one way to change the settings: under the identity's settings lock (a fenced store lock, so across processes),
    * stop its receiver wherever it runs and hold the `receive` lock, so no receiver applies the old policy from here
    * on; re-read the saved settings, apply `change` to them (it may throw, e.g. a scope check against the fresh state),
-   * publish a descriptor built from the result (the card gets the hosted tag), save it, then let the receiver start
-   * again. The SDK's descriptor rules are the validation: a change the SDK or the relay refuses is never saved.
+   * publish the descriptor and card record built from the result (the card gets the hosted tag), save it (a handle
+   * published at the home relay is then fixed there), then let the receiver start again. The SDK's rules and the
+   * relay are the validation: a change the SDK or the relay refuses is never saved, and the relay's handle refusals
+   * come back explained.
    */
   updateSettings(change: (current: HostedSettings) => HostedSettings): Promise<HostedSettings>;
   /**
@@ -189,8 +193,9 @@ export class AgentRuntime {
       vault: new StorePrekeyVault(store, { protect: prekeyProtector(this.#kek, identity.getACEId()) }),
       messageLog: this.#messageLogOptions, // A received message is stored twice until the next Inbox snapshot: its journal entry and the message log.
       checkCapacity: (m) => this.#makeRoom(store, 2 * canonicalStateBytes(m).length),
-      visibility: settings.visibility, card: settings.card, acceptProfiles: settings.acceptProfiles,
-      ...(settings.handle ? { handle: settings.handle } : {}), ...(settings.ext ? { ext: settings.ext } : {}),
+      card: settings.card, contact: settings.contact, listed: settings.listed, acceptProfiles: settings.acceptProfiles,
+      ...(settings.handle ? { handle: settings.handle } : {}), ...(settings.pay ? { pay: settings.pay } : {}),
+      ...(settings.ext ? { ext: settings.ext } : {}),
       delegations: settings.delegations, erc8004: settings.erc8004,
       foreignRelay: this.#foreignRelay,
     });
@@ -338,10 +343,16 @@ export class AgentRuntime {
         try {
           const stopped = await this.#takeReceive(aceId, store);
           try {
-            const next = change(await loadSettings(store) ?? settings);
-            const s: HostedSettings = { ...next, card: hostedCard(next.card) };
-            const client = await track(this.open(identity, store, relay, s, 'send'));
-            await client.publish({ force: true });
+            const current = await loadSettings(store) ?? settings;
+            const next = change(current);
+            const card = hostedCard(next.card);
+            const client = await track(this.open(identity, store, relay, { ...next, card }, 'send'));
+            try {
+              await client.publish({ force: true });
+            } catch (e) {
+              throw explainRefusal(e, next, relay.baseUrl, current);
+            }
+            const s = publishedAt({ ...next, card }, relay.baseUrl);
             await saveSettings(store, s); // fenced by both locks: lands only while this call still holds them
             settings = ctx.settings = s;
             basis = settingsDigest(s);

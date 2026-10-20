@@ -2,8 +2,8 @@
 // `GET /v1/listen` SSE and `POST /v1/unregister`, for the receiver workers. Packet signatures are not checked: the
 // receiving Inbox does that.
 import {
-  ACEError, compareStreamIds, decodePacket, parseAuthHeaders, verifyAuthHeaders, verifyPermit, verifyPublishedAgent,
-  verifyRegistrationRequest, type KelState, type PublishedAgent, type RelayAuthRequest,
+  ACEError, compareStreamIds, decodePacket, documentDigest, parseAuthHeaders, verifyAuthHeaders, verifyCardBundle, verifyPermit,
+  verifyPublishedAgent, verifyRegistrationRequest, type CardBundle, type KelState, type PublishedAgent, type RelayAuthRequest,
 } from '@ace-protocol/sdk';
 
 export const RELAY = 'https://relay.test';
@@ -20,6 +20,10 @@ export class FakeRelay {
   clock: () => number;
   kels = new Map<string, KelState>();
   descriptors = new Map<string, PublishedAgent>();
+  /** Stored card records by ACE ID. */
+  cards = new Map<string, CardBundle>();
+  /** Handle bindings (permanent, set once per identity, never reassigned). */
+  handles = new Map<string, string>();
   blocks = new Map<string, { blocked: boolean; revision: number }>();
   queues = new Map<string, Entry[]>();
   listeners = new Map<string, Set<Listener>>();
@@ -60,9 +64,15 @@ export class FakeRelay {
     return auth.aceId;
   }
 
-  #public(id: string): PublishedAgent | undefined {
+  /** The unexpired descriptor of a registered identity. */
+  #live(id: string): PublishedAgent | undefined {
     const d = this.descriptors.get(id);
-    return d && d.descriptor.visibility === 'public' && d.descriptor.expiresAt > this.clock() ? d : undefined;
+    return d && this.kels.has(id) && d.descriptor.expiresAt > this.clock() ? d : undefined;
+  }
+
+  #handleOf(id: string): string | undefined {
+    for (const [h, owner] of this.handles) if (owner === id) return h;
+    return undefined;
   }
 
   #listen(url: URL, headers: Record<string, string>, signal?: AbortSignal): Response {
@@ -116,6 +126,7 @@ export class FakeRelay {
       const owner = this.#auth(headers, { action: 'unregister' });
       this.kels.delete(owner);
       this.descriptors.delete(owner);
+      this.cards.delete(owner); // the handle stays bound to it, never reassigned
       this.queues.delete(owner);
       return { ok: true };
     }
@@ -128,29 +139,51 @@ export class FakeRelay {
       return { ok: true };
     }
     let m = /^\/v1\/descriptor\/(.+)$/.exec(path);
-    if (method === 'GET' && m && m[1] !== 'resolve') {
-      const d = this.#public(decodeURIComponent(m[1]));
+    if (method === 'GET' && m) {
+      const d = this.#live(decodeURIComponent(m[1]));
       if (!d) throw new HTTPError(404, 'unknown_peer');
       return d;
     }
-    if (method === 'POST' && path === '/v1/descriptor/resolve') {
-      const d = this.descriptors.get(body.aceId), reg = this.kels.get(body.aceId);
-      try {
-        if (!d || !reg) throw new Error();
-        const p = verifyPermit(body.permit, reg, undefined, now);
-        if (this.blocks.get(`${body.aceId}|${p.subject}`)?.blocked) throw new Error();
-      } catch { throw new HTTPError(404, 'unknown_peer'); }
-      return d;
+    if (method === 'POST' && path === '/v1/card') {
+      const { record, kelState } = verifyCardBundle(body, now);
+      const reg = this.kels.get(record.aceId);
+      if (!reg) throw new HTTPError(403, 'not_registered');
+      if (reg.lastHash !== kelState.lastHash) throw new HTTPError(409, 'kel_conflict');
+      const old = this.cards.get(record.aceId);
+      if (old && (old.card.issuedAt > record.issuedAt || (old.card.issuedAt === record.issuedAt && documentDigest(old.card) !== documentDigest(record)))) {
+        throw new HTTPError(409, 'stale_descriptor');
+      }
+      // A handle is set once per identity at this home and never reassigned; a record naming another home claims nothing.
+      const bound = this.#handleOf(record.aceId);
+      if (record.home !== this.baseUrl) {
+        // nothing to claim
+      } else if (bound !== undefined) {
+        if (record.handle !== bound) throw new HTTPError(400, 'invalid_argument');
+      } else if (record.handle !== undefined) {
+        if (this.handles.has(record.handle)) throw new HTTPError(409, 'handle_taken');
+        this.handles.set(record.handle, record.aceId);
+      }
+      this.cards.set(record.aceId, body as CardBundle);
+      return { ok: true };
+    }
+    m = /^\/v1\/card\/(.+)$/.exec(path);
+    if (method === 'GET' && m) {
+      const id = decodeURIComponent(m[1]);
+      const c = this.kels.has(id) ? this.cards.get(id) : undefined;
+      if (!c) throw new HTTPError(404, 'unknown_peer');
+      return c;
     }
     m = /^\/v1\/handles\/(.+)$/.exec(path);
     if (method === 'GET' && m) {
-      const d = [...this.descriptors.values()].find((a) => a.descriptor.handle === m![1] && this.#public(a.descriptor.aceId));
-      if (!d) throw new HTTPError(404, 'unknown_peer');
-      return d;
+      const owner = this.handles.get(m[1]);
+      const c = owner !== undefined && this.kels.has(owner) ? this.cards.get(owner) : undefined;
+      if (!c || c.card.home !== this.baseUrl) throw new HTTPError(404, 'unknown_peer');
+      return c;
     }
     if (method === 'GET' && path === '/v1/descriptors') {
       const profile = url.searchParams.get('profile');
-      const agents = [...this.descriptors.values()].filter((a) => this.#public(a.descriptor.aceId) && (!profile || a.descriptor.profiles.some((p) => p.id === profile)));
+      const agents = [...this.descriptors.values()].filter((a) => this.cards.get(a.descriptor.aceId)?.card.listed === true && this.#live(a.descriptor.aceId)
+        && (!profile || a.descriptor.profiles.some((p) => p.id === profile)));
       return { agents, cursor: null };
     }
     if (method === 'POST' && path === '/v1/blocks') {
@@ -172,7 +205,7 @@ export class FakeRelay {
       if (body.permit) {
         try { verifyPermit(body.permit, reg, packet.from, now); if (body.permit.issuer !== packet.to) throw new Error(); }
         catch { throw new HTTPError(403, 'not_permitted'); }
-      } else if (!this.#public(packet.to)) {
+      } else if (this.cards.get(packet.to)?.card.contact !== 'open' || !this.#live(packet.to)) {
         throw new HTTPError(403, 'not_permitted');
       }
       this.sent.push(body);
