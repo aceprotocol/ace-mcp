@@ -35,7 +35,6 @@ describe('hosted settings', () => {
     const pub = await read({ visibility: 'public', handle: 'legacy' });
     expect(pub).toMatchObject({ contact: 'open', listed: true, handle: 'legacy' });
     expect(pub).not.toHaveProperty('visibility');
-    expect(pub).not.toHaveProperty('handleHome'); // not locked until a publish at the home succeeds
     const priv = await read({ visibility: 'private' });
     expect(priv).toMatchObject({ contact: 'closed', listed: false });
     expect(priv).not.toHaveProperty('visibility');
@@ -79,7 +78,7 @@ describe('hosted settings', () => {
     }
     // A valid change publishes, then saves.
     await stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, contact: 'open', handle: 'strict' })));
-    expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toMatchObject({ handle: 'strict', handleHome: 'https://relay.test', contact: 'open' });
+    expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toMatchObject({ handle: 'strict', contact: 'open' });
     expect(stack.relay.cards.get(aceId)!.card).toMatchObject({ handle: 'strict', contact: 'open' });
   });
 });

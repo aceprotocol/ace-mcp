@@ -1,6 +1,6 @@
 import {
   ACEError, canonicalStateBytes, sha256Hex, validateCard,
-  type ACEErrorCode, type ACEStore, type AgentCard, type Contact, type DescriptorDelegation, type Erc8004Binding, type JSONObject, type ProfileManifest,
+  type ACEStore, type AgentCard, type Contact, type DescriptorDelegation, type Erc8004Binding, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 
 /** The reserved card tag: this service holds the identity's keys. */
@@ -14,10 +14,8 @@ export type BundledProfile = (typeof BUNDLED_PROFILES)[number];
  * descriptor and card record built from it (the SDK's rules and the relay are the one validation).
  */
 export interface HostedSettings {
-  /** Card record: the handle at the home relay. Set once: after it was published there it can never change. */
+  /** Card record: the handle at the home relay. Set once: the relay refuses any other once it bound one. */
   handle?: string;
-  /** The home relay `handle` was published at (recorded after a successful publish); the handle is fixed there. */
-  handleHome?: string;
   /** Card record: the presentation card (always carries the `hosted` tag). */
   card: AgentCard;
   /** Card record: CAIP-10 accounts this agent asks to be paid at. */
@@ -69,35 +67,6 @@ export async function loadSettings(store: ACEStore): Promise<HostedSettings | nu
 
 export async function saveSettings(store: ACEStore, s: HostedSettings): Promise<void> {
   await store.write(KEY, canonicalStateBytes(s));
-}
-
-/** One line on the set-once handle rule (tool descriptions and refusals). */
-export const HANDLE_SET_ONCE = 'a handle is permanent: set once per home relay, it can never be changed or removed there';
-
-/** `s` after a successful publish at `home`: a handle published there is fixed there. */
-export function publishedAt(s: HostedSettings, home: string): HostedSettings {
-  const next = { ...s };
-  if (next.handle) next.handleHome = home; else delete next.handleHome;
-  return next;
-}
-
-/**
- * A publish the relay refused, explained (the relay's code becomes the error code): a handle another identity holds
- * (`handle_taken`), or a card record without the handle this identity already holds at that relay (`invalid_argument`,
- * explained only when `s` carries a handle or `previous` had one; otherwise the relay's answer stands as is).
- */
-export function explainRefusal(err: unknown, s: HostedSettings, home: string, previous?: HostedSettings | null): unknown {
-  if (!(err instanceof ACEError) || err.code !== 'relay_rejected') return err;
-  const host = new URL(home).host;
-  const opts = { cause: err, ...(err.status !== undefined ? { status: err.status } : {}), relayCode: err.relayCode };
-  if (err.relayCode === 'handle_taken' && s.handle) {
-    return new ACEError('handle_taken' as ACEErrorCode, `@${s.handle}@${host} belongs to another identity; choose another handle`, opts);
-  }
-  if (err.relayCode === 'invalid_argument' && (s.handle !== undefined || previous?.handle !== undefined)) {
-    return new ACEError('invalid_argument', `${home} refused the card record (${err.detail}): ${HANDLE_SET_ONCE}. `
-      + 'If this identity already holds a handle there, configure exactly that one', opts);
-  }
-  return err;
 }
 
 export function settingsDigest(s: HostedSettings | null): string {

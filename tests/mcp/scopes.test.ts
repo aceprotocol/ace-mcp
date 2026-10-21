@@ -117,8 +117,8 @@ describe('scope map (D12)', () => {
     try {
       expect(await configurer.call('ace_configure', { handle: 'fresh' })).toMatchObject({ ok: false, error: 'insufficient_scope' });
       expect(await fresh.ownerOk('configure', { handle: 'fresh' })).toMatchObject({ handle: 'fresh', address: '@fresh@relay.test', contact: 'closed', listed: false });
-      expect(await saved(fresh)).toMatchObject({ handle: 'fresh', handleHome: 'https://relay.test' });
-      // Set once: never changed or removed at its home, and the tool says so before anything is published.
+      expect((await saved(fresh))?.handle).toBe('fresh');
+      // Set once: never changed or removed at its home; the relay refuses and the tool explains.
       for (const handle of ['renamed', '']) {
         const r = await fresh.owner('configure', { handle });
         expect(r, handle).toMatchObject({ ok: false, error: 'invalid_argument' });
@@ -131,9 +131,9 @@ describe('scope map (D12)', () => {
       expect(taken).toMatchObject({ ok: false, error: 'handle_taken' });
       expect((taken as { message: string }).message).toContain('@fresh@relay.test');
       expect((await saved(other))?.handle).toBeUndefined();
-      // Settings that lost the lock (written before card records): the relay's set-once refusal comes back explained.
+      // Settings that lost the handle (written before card records): the relay's set-once refusal comes back explained.
       await stack.service.runtime.withIdentity(fresh.aceId, undefined, async (c) => {
-        const { handle: _h, handleHome: _home, ...rest } = (await loadSettings(c.store))!;
+        const { handle: _h, ...rest } = (await loadSettings(c.store))!;
         await saveSettings(c.store, rest);
       });
       const refused = await fresh.owner('configure', { handle: 'another' });

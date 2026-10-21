@@ -5,44 +5,32 @@
  * the relay accepted it.
  */
 import {
-  ACE_ID_RE, MAX_DELEGATION_LIFETIME, MAX_PAY_ACCOUNTS, createDelegationCredential, isHandle, validateErc8004Binding,
-  verifyErc8004Registration, type DescriptorDelegation, type JSONObject, type ProfileManifest,
+  ACEError, ACE_ID_RE, CAIP10_RE, HANDLE_RE, MAX_DELEGATION_LIFETIME, MAX_PAY_ACCOUNTS, createDelegationCredential, handleAddress,
+  validateErc8004Binding, verifyErc8004Registration, type DescriptorDelegation, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 import type { JSONSchema } from '@ace-protocol/sdk/tools';
 import { McpToolError, closed, need, ok, type HostedTool } from './shared.js';
-import { BUNDLED_PROFILES, HANDLE_SET_ONCE, type BundledProfile, type HostedSettings } from '../../agent/settings.js';
+import { BUNDLED_PROFILES, type BundledProfile, type HostedSettings } from '../../agent/settings.js';
 import { nowSeconds } from '../../clock.js';
 
 const ACE_ID: JSONSchema = { type: 'string', pattern: ACE_ID_RE.source, description: 'ACE ID' };
 const OBJECT: JSONSchema = { type: 'object', properties: {}, additionalProperties: true };
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
-/** CAIP-10 account grammar (04 § Card record `pay`). */
-const CAIP10 = '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$';
-const bad = (message: string) => new McpToolError('invalid_argument', message, false);
+/** One line on the set-once handle rule (tool description and refusals). */
+const HANDLE_SET_ONCE = 'a handle is permanent: set once per home relay, it can never be changed or removed there';
 
 /**
  * Apply a configure call to the current settings (omitted fields are kept; `handle: ""`, `pay: []` and `ext: {}`
- * clear). A handle published at `home` is set once: changing or removing it there is refused before anything is
- * published (the relay refuses it too).
+ * clear). The set-once handle rule is the relay's: a change it refuses comes back through `explainRefusal`.
  */
-function merge(s: HostedSettings, a: JSONObject, home: string): HostedSettings {
+function merge(s: HostedSettings, a: JSONObject): HostedSettings {
   const next: HostedSettings = { ...s };
-  if (a.handle !== undefined) {
-    const want = a.handle === '' ? undefined : a.handle as string;
-    if (want !== undefined && !isHandle(want)) throw bad('handle must match ^[a-z][a-z0-9_-]{2,31}$');
-    if (s.handle !== undefined && s.handleHome === home && want !== s.handle) {
-      throw bad(`${HANDLE_SET_ONCE}; this identity's handle is @${s.handle}@${new URL(home).host}`);
-    }
-    if (want === undefined) { delete next.handle; delete next.handleHome; } else if (want !== s.handle) { next.handle = want; delete next.handleHome; }
-  }
+  if (a.handle === '') delete next.handle; else if (a.handle !== undefined) next.handle = a.handle as string;
   if (a.contact !== undefined) next.contact = a.contact as HostedSettings['contact'];
   if (a.listed !== undefined) next.listed = a.listed as boolean;
   if (a.pay !== undefined) {
-    const pay = a.pay as string[];
-    if (pay.length === 0) delete next.pay;
-    else if (new Set(pay).size !== pay.length) throw bad(`pay takes 1-${MAX_PAY_ACCOUNTS} distinct CAIP-10 accounts`);
-    else next.pay = pay;
+    if ((a.pay as string[]).length === 0) delete next.pay; else next.pay = a.pay as string[];
   }
   if (a.card !== undefined) next.card = a.card as unknown as HostedSettings['card'];
   if (a.profiles !== undefined) next.profiles = a.profiles as BundledProfile[];
@@ -52,6 +40,24 @@ function merge(s: HostedSettings, a: JSONObject, home: string): HostedSettings {
     if (Object.keys(a.ext as JSONObject).length === 0) delete next.ext; else next.ext = a.ext as Record<string, JSONObject>;
   }
   return next;
+}
+
+/**
+ * A publish the relay refused, explained (the relay's code becomes the error code): a handle another identity holds
+ * (`handle_taken`), or a card record without the handle this identity already holds at that relay (`invalid_argument`,
+ * explained only when `next` carries a handle or `previous` had one; otherwise the relay's answer stands as is).
+ */
+function explainRefusal(err: unknown, next: HostedSettings, previous: HostedSettings, home: string): unknown {
+  if (!(err instanceof ACEError) || err.code !== 'relay_rejected') return err;
+  const opts = { cause: err, ...(err.status !== undefined ? { status: err.status } : {}), relayCode: err.relayCode };
+  if (err.relayCode === 'handle_taken' && next.handle) {
+    return new ACEError('handle_taken', `${handleAddress(next.handle, home)} belongs to another identity; choose another handle`, opts);
+  }
+  if (err.relayCode === 'invalid_argument' && (next.handle !== undefined || previous.handle !== undefined)) {
+    return new ACEError('invalid_argument', `${home} refused the card record (${err.detail}): ${HANDLE_SET_ONCE}. `
+      + 'If this identity already holds a handle there, configure exactly that one', opts);
+  }
+  return err;
 }
 
 /** Whether two `pay` lists name different account sets (order-insensitive; absent is empty). */
@@ -87,8 +93,8 @@ export const hostedTools: HostedTool[] = [
     inputSchema: closed({
       contact: { type: 'string', enum: ['open', 'closed'] },
       listed: { type: 'boolean' },
-      handle: { type: 'string', maxLength: 32 },
-      pay: { type: 'array', items: { type: 'string', pattern: CAIP10, maxLength: 178 }, maxItems: MAX_PAY_ACCOUNTS },
+      handle: { type: 'string', pattern: `^$|${HANDLE_RE.source}` },
+      pay: { type: 'array', items: { type: 'string', pattern: CAIP10_RE.source, maxLength: 178 }, maxItems: MAX_PAY_ACCOUNTS, uniqueItems: true },
       card: OBJECT,
       profiles: { type: 'array', items: { type: 'string', enum: BUNDLED_PROFILES }, maxItems: 2 },
       manifests: { type: 'array', items: OBJECT, maxItems: 16 },
@@ -98,16 +104,18 @@ export const hostedTools: HostedTool[] = [
     annotations: WRITE,
     async run(args, { c, has }) {
       const home = c.relay.baseUrl;
+      let change: { current: HostedSettings; next: HostedSettings } | undefined;
       // Merged onto, and checked against, the settings as saved when the change lands (not this call's snapshot).
       const s = await c.updateSettings((current) => {
-        const next = merge(current, args, home);
+        const next = merge(current, args);
         if (needsAdmission(current, next) && !has('ace:admission')) {
           throw new McpToolError('insufficient_scope', 'Opening contact, listing, claiming a handle, auto-accepting more profiles or changing pay accounts requires ace:admission (or the owner API)', false);
         }
+        change = { current, next };
         return next;
-      });
+      }).catch((e: unknown) => { throw change ? explainRefusal(e, change.next, change.current, home) : e; });
       return ok({
-        status: 'published', ...(s.handle ? { handle: s.handle, address: `@${s.handle}@${new URL(home).host}` } : {}), card: s.card,
+        status: 'published', ...(s.handle ? { handle: s.handle, address: handleAddress(s.handle, home) } : {}), card: s.card,
         ...(s.pay ? { pay: s.pay } : {}), contact: s.contact, listed: s.listed,
         profiles: (await c.network()).profiles.descriptors(), acceptProfiles: s.acceptProfiles, ...(s.ext ? { ext: s.ext } : {}),
       });
