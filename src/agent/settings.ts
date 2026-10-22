@@ -53,16 +53,11 @@ export function defaultSettings(): HostedSettings {
   return { contact: 'closed', listed: false, card: hostedCard({}), profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] };
 }
 
-/**
- * The saved settings. Settings saved before card records carry `visibility`: `public` reads as `contact: open` +
- * `listed: true`, `private` (or none) as `contact: closed` + `listed: false`; the next save drops it.
- */
+/** The saved settings. */
 export async function loadSettings(store: ACEStore): Promise<HostedSettings | null> {
   const raw = await store.read(KEY);
   if (raw === null) return null;
-  const { visibility, ...rest } = JSON.parse(new TextDecoder().decode(raw)) as Partial<HostedSettings> & { visibility?: unknown };
-  const legacy = visibility === 'public' ? { contact: 'open', listed: true } as const : { contact: 'closed', listed: false } as const;
-  return { ...legacy, ...rest } as HostedSettings;
+  return JSON.parse(new TextDecoder().decode(raw)) as HostedSettings;
 }
 
 export async function saveSettings(store: ACEStore, s: HostedSettings): Promise<void> {

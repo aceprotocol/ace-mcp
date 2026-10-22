@@ -5,7 +5,7 @@ import { provisionIdentity } from '../../src/identity/provision.js';
 import { defaultSettings, hostedCard, loadSettings } from '../../src/agent/settings.js';
 import { identityKeys } from '../../src/store/keyspace.js';
 import { connect, createIdentity, startListening, type McpTestClient } from '../helpers/client.js';
-import { canonicalStateBytes, sha256Hex } from '@ace-protocol/sdk';
+import { sha256Hex } from '@ace-protocol/sdk';
 
 const MANIFEST: ProfileManifest = {
   id: 'example:weather:1',
@@ -22,23 +22,6 @@ describe('hosted settings', () => {
     expect(() => hostedCard({ name: 'Agent' })).toThrow(/only description, image and tags/);
     expect(() => hostedCard({ description: 'bad\u0000text' })).toThrow();
     expect(() => hostedCard({ tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
-  });
-
-  it('reads settings saved before card records: public is contact open + listed, private is closed + unlisted', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
-    const aceId = identity.getACEId();
-    const read = (legacy: Record<string, unknown>) => stack.service.runtime.withIdentity(aceId, undefined, async (c) => {
-      const { contact: _c, listed: _l, ...base } = (await loadSettings(c.store))!;
-      await c.store.write('mcp/settings.json', canonicalStateBytes({ ...base, ...legacy } as never));
-      return loadSettings(c.store);
-    });
-    const pub = await read({ visibility: 'public', handle: 'legacy' });
-    expect(pub).toMatchObject({ contact: 'open', listed: true, handle: 'legacy' });
-    expect(pub).not.toHaveProperty('visibility');
-    const priv = await read({ visibility: 'private' });
-    expect(priv).toMatchObject({ contact: 'closed', listed: false });
-    expect(priv).not.toHaveProperty('visibility');
-    expect(await read({})).toMatchObject({ contact: 'closed', listed: false });
   });
 
   it('settings not saved when publish rejected (the SDK descriptor rules are the only check)', async () => {
