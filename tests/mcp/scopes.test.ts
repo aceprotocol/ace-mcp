@@ -14,7 +14,7 @@ const PEER = 'ace:sha256:' + '1'.repeat(64);
 beforeAll(async () => {
   stack = await createStack(31);
   url = await startListening(stack.service);
-  agent = await createIdentity(stack.service, url, 'Scoped');
+  agent = await createIdentity(stack.service, url);
   const grant = async (scopes: string[]) => connect(url, (await stack.service.grants.create({ aceId: agent.aceId, ownerHash: sha256Hex(agent.token), clientId: 'c', resource: url, scopes })).access_token);
   reader = await grant(['ace:read']);
   standard = await grant(DEFAULT_SCOPES);
@@ -102,7 +102,7 @@ describe('scope map (D12)', () => {
       // Narrowing and neutral changes stay available.
       expect((await configurer.call('ace_network', { action: 'block', peer: PEER })).ok).toBe(true);
       expect((await configurer.call('ace_network', { action: 'reject', peer: PEER })).ok).toBe(true);
-      expect((await configurer.callOk('ace_configure', { card: { name: 'Renamed' } })).card.name).toBe('Renamed');
+      expect((await configurer.callOk('ace_configure', { card: { description: 'Renamed' } })).card.description).toBe('Renamed');
       // The owner may widen; so may a client the owner granted ace:admission.
       expect((await agent.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] })).contact).toBe('open');
       expect((await agent.client.call('ace_network', { action: 'unblock', peer: PEER })).ok).toBe(true);
@@ -110,8 +110,8 @@ describe('scope map (D12)', () => {
   });
 
   it('claiming a handle widens admission; a handle is set once; a taken handle is refused', async () => {
-    const fresh = await createIdentity(stack.service, url, 'Fresh');
-    const other = await createIdentity(stack.service, url, 'Other');
+    const fresh = await createIdentity(stack.service, url);
+    const other = await createIdentity(stack.service, url);
     const configurer = await connect(url, (await stack.service.grants.create({ aceId: fresh.aceId, ownerHash: sha256Hex(fresh.token), clientId: 'c', resource: url, scopes: [...DEFAULT_SCOPES, 'ace:configure'] })).access_token);
     const saved = (a: HostedTestAgent) => stack.service.runtime.withIdentity(a.aceId, undefined, (c) => loadSettings(c.store));
     try {
@@ -125,7 +125,7 @@ describe('scope map (D12)', () => {
         expect((r as { message: string }).message).toMatch(/set once/);
       }
       expect(stack.relay.cards.get(fresh.aceId)!.card.handle).toBe('fresh');
-      expect((await configurer.callOk('ace_configure', { card: { name: 'Fresh 2' } })).handle).toBe('fresh'); // omitted: kept
+      expect((await configurer.callOk('ace_configure', { card: { description: 'Fresh 2' } })).handle).toBe('fresh'); // omitted: kept
       // Another identity's claim of it: handle_taken, explained, and nothing saved.
       const taken = await other.owner('configure', { handle: 'fresh' });
       expect(taken).toMatchObject({ ok: false, error: 'handle_taken' });
@@ -160,7 +160,7 @@ describe('scope map (D12)', () => {
       expect((await agent.client.callOk('ace_configure', { pay })).pay).toEqual(pay);
       expect(stack.relay.cards.get(agent.aceId)!.card.pay).toEqual(pay);
       // The same set in another order is no change: not gated.
-      expect((await configurer.callOk('ace_configure', { pay: [...pay].reverse(), card: { name: 'Scoped' } })).card.name).toBe('Scoped');
+      expect((await configurer.callOk('ace_configure', { pay: [...pay].reverse(), card: { description: 'Scoped' } })).card.description).toBe('Scoped');
       // Replacing, removing or clearing an account is gated.
       for (const next of [[...pay.slice(1), acct(99)], pay.slice(1), []]) {
         expect(await configurer.call('ace_configure', { pay: next }), JSON.stringify(next)).toMatchObject(denied);
@@ -172,21 +172,21 @@ describe('scope map (D12)', () => {
   });
 
   it('a relay invalid_argument without any handle involved comes back as the relay said, without the set-once text', async () => {
-    const plain = await createIdentity(stack.service, url, 'Plain');
+    const plain = await createIdentity(stack.service, url);
     const route = stack.relay.route.bind(stack.relay);
     stack.relay.route = async (method, u, headers, body) => {
       if (u.pathname === '/v1/card' && method === 'POST') throw new ACEError('invalid_argument', 'refused');
       return route(method, u, headers, body);
     };
     try {
-      const r = await plain.owner('configure', { card: { name: 'Plain 2' } });
+      const r = await plain.owner('configure', { card: { description: 'Plain 2' } });
       expect(r).toMatchObject({ ok: false, error: 'relay_rejected' });
       expect((r as { message: string }).message).not.toMatch(/set once/);
     } finally { stack.relay.route = route; await plain.client.close(); }
   });
 
   it('the hosted card tag is enforced on the published card record', async () => {
-    expect((await agent.ownerOk('configure', { card: { name: 'Scoped', tags: ['helper'] } })).card.tags).toEqual(['helper', 'hosted']);
+    expect((await agent.ownerOk('configure', { card: { description: 'Scoped', tags: ['helper'] } })).card.tags).toEqual(['helper', 'hosted']);
     expect(stack.relay.cards.get(agent.aceId)!.card.card.tags).toEqual(['helper', 'hosted']);
   });
 

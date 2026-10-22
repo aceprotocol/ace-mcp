@@ -9,8 +9,8 @@ const REGISTRY = 'eip155:8453:0x8004a169fb4a3325136eb29fa0ceb6d2e539a432';
 beforeAll(async () => {
   stack = await createStack(32);
   url = await startListening(stack.service);
-  issuer = await createIdentity(stack.service, url, 'Controller');
-  subject = await createIdentity(stack.service, url, 'Delegate');
+  issuer = await createIdentity(stack.service, url);
+  subject = await createIdentity(stack.service, url);
 });
 afterAll(async () => { await issuer?.client.close(); await subject?.client.close(); await stack?.close(); });
 

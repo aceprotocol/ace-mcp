@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { DEFAULT_SCOPES, SCOPES } from './grants.js';
 import { ACEError, sha256Hex } from '@ace-protocol/sdk';
-import { defaultSettings } from '../agent/settings.js';
 import { RateLimitedError, type RateLimiter } from '../store/rate-limit.js';
 import { rateBucket } from '../store/keyspace.js';
 import { provisionIdentity, rollbackProvisioned, type ProvisionDeps } from '../identity/provision.js';
@@ -11,7 +10,6 @@ import { readParams, type Params } from './params.js';
 import { redirectUriMatches } from './clients.js';
 import type { OAuthClient, OAuthStore } from './store.js';
 
-const NAME_MAX = 64;
 /** Upper bound (bytes) for the free-form request parameters echoed into the page and the nonce binding. */
 export const MAX_PARAM_BYTES = 1024;
 /** Query parameters carried from GET to the POST as hidden fields, in this order. */
@@ -140,8 +138,7 @@ function consentPage(reply: FastifyReply, v: Validated, nonce: string): FastifyR
 <form method="post" action="/oauth/authorize">
 ${hidden}
 <input type="hidden" name="action" value="create">
-<label for="name">Agent name</label>
-<input type="text" id="name" name="name" required minlength="1" maxlength="${NAME_MAX}" autocomplete="off">
+<p>It starts closed and unlisted, without a handle; the client can choose its handle and card later, with the permissions above.</p>
 <button type="submit">Create</button>
 </form></section>
 <section><h2>Use an existing token</h2>
@@ -185,22 +182,13 @@ export function registerAuthorizeRoutes(app: FastifyInstance, deps: ProvisionDep
     // Check the user's input first, so a typo does not burn the page; then consume the one-time page
     // nonce (atomic) before any side effect, so a double submit cannot create two identities.
     const action = p!.get('action');
-    const name = p!.get('name') ?? '';
     const given = (p!.get('token') ?? '').trim();
     let existing: string | null = null;
-    if (action === 'create') {
-      if (name.trim().length === 0 || name.length > NAME_MAX) return errorPage(reply, 400, `The agent name must be 1–${NAME_MAX} characters.`);
-      // The SDK's profile rules (e.g. no control characters) before the nonce is spent.
-      try {
-        defaultSettings(name);
-      } catch (e) {
-        if (e instanceof ACEError) return errorPage(reply, 400, 'The agent name is not valid (1–64 characters, no control characters).');
-        throw e;
-      }
-    } else if (action === 'token') {
+    // `create` takes no input.
+    if (action === 'token') {
       existing = await deps.vault.resolveToken(given);
       if (!existing) return errorPage(reply, 400, 'Unknown token.');
-    } else {
+    } else if (action !== 'create') {
       return errorPage(reply, 400, 'Choose “Create” or “Use an existing token”.');
     }
     if (!(await deps.store.takePageNonce(p!.get('form_nonce'), binding(v.carried)))) {
@@ -214,7 +202,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, deps: ProvisionDep
       token = given;
     } else {
       try {
-        const c = await provisionIdentity(deps, { name }, req.ip);
+        const c = await provisionIdentity(deps, req.ip);
         aceId = c.identity.getACEId();
         token = c.token;
       } catch (e) {

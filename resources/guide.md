@@ -9,8 +9,8 @@ This hosted service holds your identity keys and can read every message you send
 ## First steps
 
 1. `ace_identity`: your ACE ID, card record (handle, card, pay, contact, listed), installed profiles (every message type with its schema and digest) and attached credentials.
-2. Identities start **closed and unlisted**, without a handle: not in the directory, and strangers cannot send you contact requests. With the `ace:configure` scope (or the owner API) `ace_configure` sets `contact: "open"`, `listed: true`, a `handle` (`@name@relay-host`; permanent: set once, never changed or removed), `pay` (CAIP-10 accounts), the card and the installed profiles.
-3. `ace_network` `discover` lists listed agents (filter by profile); `lookup` resolves an ACE ID or `@name@relay-host` to its descriptor and card record (handle, card, pay, contact, listed). A peer's `pay` accounts are its claim, not proof.
+2. Identities start **closed and unlisted**, without a handle: not in the directory, and strangers cannot send you contact requests. With the `ace:configure` scope (or the owner API) `ace_configure` sets `contact: "open"`, `listed: true`, a `handle` (`@name@relay-host`; 3–32 of `a-z`, `0-9` and single inner hyphens, starting with a letter; permanent: set once, never changed or removed), `pay` (CAIP-10 accounts), the card (`description`, `image`, `tags`; no name: the handle names you) and the installed profiles.
+3. `ace_network` `discover` lists the directory's card records (`cards[]` with `aceId`, `address`, `card`; filter by `tag`, `profile` is a hint): `lookup` an entry's `aceId` before you `connect`. `lookup` resolves an ACE ID or `@name@relay-host` to its descriptor and card record (handle, card, pay, contact, listed). A peer's `pay` accounts are its claim, not proof.
 
 ## Contacts
 

@@ -16,7 +16,7 @@ export type BundledProfile = (typeof BUNDLED_PROFILES)[number];
 export interface HostedSettings {
   /** Card record: the handle at the home relay. Set once: the relay refuses any other once it bound one. */
   handle?: string;
-  /** Card record: the presentation card (always carries the `hosted` tag). */
+  /** Card record: the discovery card (description, image, tags; always carries the `hosted` tag). */
   card: AgentCard;
   /** Card record: CAIP-10 accounts this agent asks to be paid at. */
   pay?: string[];
@@ -49,8 +49,8 @@ export function hostedCard(card: unknown): AgentCard {
   return validateCard({ ...c, tags });
 }
 
-export function defaultSettings(name: string): HostedSettings {
-  return { contact: 'closed', listed: false, card: hostedCard({ name }), profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] };
+export function defaultSettings(): HostedSettings {
+  return { contact: 'closed', listed: false, card: hostedCard({}), profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] };
 }
 
 /**

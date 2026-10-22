@@ -5,7 +5,7 @@ import { createStack, type Stack } from '../helpers/stack.js';
 import { createIdentity, startListening, toolCount, type HostedTestAgent } from '../helpers/client.js';
 
 let stack: Stack, url: string, agent: HostedTestAgent;
-beforeAll(async () => { stack = await createStack(38); url = await startListening(stack.service); agent = await createIdentity(stack.service, url, 'Reader'); });
+beforeAll(async () => { stack = await createStack(38); url = await startListening(stack.service); agent = await createIdentity(stack.service, url); });
 afterAll(async () => { await agent?.client.close(); await stack?.close(); });
 
 describe('resources', () => {

@@ -10,8 +10,8 @@ const silent = { error: () => undefined };
 beforeAll(async () => {
   stack = await createStack(30);
   url = await startListening(stack.service);
-  alice = await createIdentity(stack.service, url, 'Alice');
-  bob = await createIdentity(stack.service, url, 'Bob');
+  alice = await createIdentity(stack.service, url);
+  bob = await createIdentity(stack.service, url);
 });
 afterAll(async () => {
   await alice?.client.close();
@@ -25,25 +25,35 @@ const outboxStatus = async (a: HostedTestAgent, messageId: string) =>
 describe('two hosted identities through the relay (tool-call receive path)', () => {
   it('starts closed and unlisted: not in the directory, no handle, strangers cannot send', async () => {
     const me = await alice.client.callOk('ace_identity');
-    expect(me).toMatchObject({ aceId: alice.aceId, contact: 'closed', listed: false, custody: 'hosted', card: { name: 'Alice', tags: ['hosted'] } });
+    expect(me).toMatchObject({ aceId: alice.aceId, contact: 'closed', listed: false, custody: 'hosted', card: { tags: ['hosted'] } });
     expect(me).not.toHaveProperty('handle');
     expect(me.profiles.map((p: { id: string }) => p.id)).toEqual(['ace:core:1', 'ace:text:1']);
-    expect((await bob.client.callOk('ace_network', { action: 'discover' })).agents).toEqual([]);
+    expect((await bob.client.callOk('ace_network', { action: 'discover' })).cards).toEqual([]);
     expect(stack.relay.cards.get(alice.aceId)?.card).toMatchObject({ contact: 'closed', listed: false });
     expect(await bob.client.call('ace_network', { action: 'connect', peer: alice.aceId })).toMatchObject({ ok: false, error: 'not_permitted' });
   });
 
   it('contact request, explicit accept, send, inbox read + ack, and the receipt marks the send delivered', async () => {
     const pay = ['eip155:8453:0x00000000000000000000000000000000000000a1', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv'];
-    expect(await alice.ownerOk('configure', { contact: 'open', listed: true, handle: 'alice', pay, card: { name: 'Alice', description: 'Answers questions' } }))
-      .toMatchObject({ status: 'published', handle: 'alice', address: '@alice@relay.test', pay, contact: 'open', listed: true, card: { tags: ['hosted'] } });
+    expect(await alice.ownerOk('configure', { contact: 'open', listed: true, handle: 'alice', pay, card: { description: 'Answers questions', tags: ['qa'] } }))
+      .toMatchObject({ status: 'published', handle: 'alice', address: '@alice@relay.test', pay, contact: 'open', listed: true, card: { tags: ['qa', 'hosted'] } });
+    // discover returns card views (aceId, address, card), filtered by tag or the profile hint; lookup before connecting
     const found = await bob.client.callOk('ace_network', { action: 'discover', profile: 'ace:text:1' });
-    expect(found.agents.map((a: { aceId: string }) => a.aceId)).toEqual([alice.aceId]);
+    expect(found.cards).toEqual([{ aceId: alice.aceId, home: 'https://relay.test', handle: 'alice', address: '@alice@relay.test',
+      card: { description: 'Answers questions', tags: ['qa', 'hosted'] }, pay, contact: 'open', listed: true }]);
+    expect(found.untrusted).toEqual(expect.arrayContaining(['cards[].card']));
+    expect((await bob.client.callOk('ace_network', { action: 'discover', tag: 'qa' })).cards.map((c: { aceId: string }) => c.aceId)).toEqual([alice.aceId]);
+    expect((await bob.client.callOk('ace_network', { action: 'discover', tag: 'legal' })).cards).toEqual([]);
+    expect(await bob.client.call('ace_network', { action: 'discover', tag: 'Not A Tag' })).toMatchObject({ ok: false, error: 'invalid_argument' });
     const looked = await bob.client.callOk('ace_network', { action: 'lookup', peer: '@alice@relay.test' });
     expect(looked.agent.aceId).toBe(alice.aceId);
-    expect(looked.card).toEqual({ home: 'https://relay.test', handle: 'alice', card: { name: 'Alice', description: 'Answers questions', tags: ['hosted'] }, pay, contact: 'open', listed: true });
+    expect(looked.card).toEqual({ aceId: alice.aceId, home: 'https://relay.test', handle: 'alice', address: '@alice@relay.test', card: { description: 'Answers questions', tags: ['qa', 'hosted'] }, pay, contact: 'open', listed: true });
     expect(looked.untrusted).toContain('card');
     expect((await bob.client.callOk('ace_network', { action: 'lookup', peer: alice.aceId })).card).toMatchObject({ handle: 'alice', contact: 'open' });
+    // a typed address may omit the leading @ and use any case
+    expect((await bob.client.callOk('ace_network', { action: 'lookup', peer: 'Alice@Relay.Test' })).agent.aceId).toBe(alice.aceId);
+    // a card carries no name
+    expect(await alice.owner('configure', { card: { name: 'Alice' } })).toMatchObject({ ok: false, error: 'invalid_authorization' });
 
     expect(await bob.client.callOk('ace_network', { action: 'connect', peer: alice.aceId, note: 'hello from bob' })).toMatchObject({ status: 'pending', profile: 'ace:text:1' });
     expect((await alice.client.callOk('ace_inbox', {})).messages).toEqual([]); // processes the contact packet
@@ -72,8 +82,8 @@ describe('two hosted identities through the relay (tool-call receive path)', () 
   });
 
   it('closed pairing: invite admits the invitee; import_invitation never admits; connect completes it', async () => {
-    const carol = await createIdentity(stack.service, url, 'Carol');
-    const dave = await createIdentity(stack.service, url, 'Dave');
+    const carol = await createIdentity(stack.service, url);
+    const dave = await createIdentity(stack.service, url);
     try {
       const { source } = await dave.client.callOk('ace_network', { action: 'publish' });
       const inv = await carol.client.callOk('ace_network', { action: 'invite', source });
@@ -163,8 +173,8 @@ describe('resident workers', () => {
       expect(stack.relay.requests.filter((r) => r.path === '/v1/listen').every((r) => r.forwardedFor === null)).toBe(true);
 
       // A settings change restarts the receiver with the new policy.
-      await alice.ownerOk('configure', { card: { name: 'Alice 2' } });
-      await eventually(async () => stack.relay.cards.get(alice.aceId)!.card.card.name === 'Alice 2');
+      await alice.ownerOk('configure', { card: { description: 'Alice 2' } });
+      await eventually(async () => stack.relay.cards.get(alice.aceId)!.card.card.description === 'Alice 2');
       await eventually(async () => stack.service.runtime.receivers.has(alice.aceId));
 
       // Delete stops the receiver, unregisters and erases everything.

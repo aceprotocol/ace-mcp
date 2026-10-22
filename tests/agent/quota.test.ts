@@ -12,8 +12,8 @@ const BIG = 200_000; // characters per message (ace:text:1 allows 262 144)
 beforeAll(async () => {
   stack = await createStack(50);
   url = await startListening(stack.service);
-  alice = await createIdentity(stack.service, url, 'Alice');
-  bob = await createIdentity(stack.service, url, 'Bob');
+  alice = await createIdentity(stack.service, url);
+  bob = await createIdentity(stack.service, url);
   // Contact through Alice's acceptProfiles rule, on the tool-call receive path.
   await alice.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
   await bob.client.callOk('ace_network', { action: 'connect', peer: alice.aceId });

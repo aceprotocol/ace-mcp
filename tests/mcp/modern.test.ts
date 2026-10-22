@@ -17,7 +17,7 @@ beforeAll(async () => {
   stack = await createStack(24);
   service = stack.service;
   const origin = await service.app.listen({ host: '127.0.0.1', port: 0 }); url = origin + '/mcp';
-  const created = await provisionIdentity(service.deps, { name: 'Private agent' }, '127.0.0.1'); ownerToken = created.token; aceId = created.identity.getACEId();
+  const created = await provisionIdentity(service.deps, '127.0.0.1'); ownerToken = created.token; aceId = created.identity.getACEId();
   const issued = await service.grants.create({ aceId, ownerHash: sha256Hex(ownerToken), resource: url, clientId: 'test-client', scopes: ['ace:read'] }); token = issued.access_token;
 });
 afterAll(async () => { await stack.close(); });

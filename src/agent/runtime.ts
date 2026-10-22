@@ -307,7 +307,7 @@ export class AgentRuntime {
     if (!loaded) throw unauthenticated();
     const { identity, record } = loaded;
     const relay = this.#homeRelay(store, ip);
-    let settings = saved ?? defaultSettings('ACE agent');
+    let settings = saved ?? defaultSettings();
     /** The digest of the saved settings `settings` came from ('' for none). */
     let basis = settingsDigest(saved);
     const opened: NetworkClient[] = [];
@@ -330,7 +330,7 @@ export class AgentRuntime {
             const now = await loadSettings(store);
             if (settingsDigest(now) === basis) return h;
             await h.close();
-            settings = ctx.settings = now ?? defaultSettings('ACE agent');
+            settings = ctx.settings = now ?? defaultSettings();
             basis = settingsDigest(now);
             send = undefined;
           }

@@ -9,8 +9,8 @@ const silent = { error: () => undefined };
 beforeAll(async () => {
   stack = await createStack(52);
   url = await startListening(stack.service);
-  alice = await createIdentity(stack.service, url, 'Alice');
-  carol = await createIdentity(stack.service, url, 'Carol');
+  alice = await createIdentity(stack.service, url);
+  carol = await createIdentity(stack.service, url);
 });
 afterAll(async () => {
   await alice?.client.close(); await carol?.client.close();

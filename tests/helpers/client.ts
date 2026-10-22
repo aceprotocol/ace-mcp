@@ -50,8 +50,8 @@ export async function connect(url: string, accessToken: string): Promise<McpTest
 }
 
 /** Provision a hosted identity through the real flow (vault, settings, relay registration, descriptor) and grant a client. */
-export async function createIdentity(service: McpApp, url: string, name: string, scopes: readonly Scope[] = SCOPES): Promise<HostedTestAgent> {
-  const made = await provisionIdentity(service.deps, { name }, '127.0.0.1');
+export async function createIdentity(service: McpApp, url: string, scopes: readonly Scope[] = SCOPES): Promise<HostedTestAgent> {
+  const made = await provisionIdentity(service.deps, '127.0.0.1');
   const aceId = made.identity.getACEId();
   const tokens = await service.grants.create({ aceId, ownerHash: sha256Hex(made.token), clientId: 'test-client', resource: url, scopes: [...scopes] });
   const client = await connect(url, tokens.access_token);

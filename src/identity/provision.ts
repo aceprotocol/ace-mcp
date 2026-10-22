@@ -14,10 +14,9 @@ export type ProvisionDeps = Pick<ToolDeps, 'vault' | 'runtime' | 'rateLimiter' |
  */
 export async function provisionIdentity(
   deps: ProvisionDeps,
-  input: { name: string },
   ip: string,
 ): Promise<{ identity: SoftwareIdentity; token: string; record: IdentityRecord }> {
-  const settings = defaultSettings(input.name); // validates the name before anything is created
+  const settings = defaultSettings();
   await deps.rateLimiter.enforce(rateBucket.create(ip), deps.config.identityCreateRateLimit, 3600);
   const created = await deps.vault.create();
   const aceId = created.identity.getACEId();

@@ -12,7 +12,7 @@ afterAll(() => stack?.close());
 
 describe('prekey seeds are protected like identity seeds', () => {
   it('the vault document is sealed under the prekey subkey inside the store layer', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Keys' }, '127.0.0.1');
+    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
     const raw = await stack.redis.getBuffer(identityKeys(aceId).storeValues + 'prekeys.json');
     expect(raw).not.toBeNull();
@@ -26,13 +26,13 @@ describe('prekey seeds are protected like identity seeds', () => {
     // Bound to its identity: another identity's subkey cannot open it.
     await expect(prekeyProtector(stack.config.kek, 'ace:sha256:' + '0'.repeat(64)).open(storeLayer)).rejects.toBeInstanceOf(SealedDataError);
     // Settings are saved for the worker.
-    expect((await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store)))?.card.name).toBe('Keys');
+    expect((await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store)))?.card).toEqual({ tags: ['hosted'] });
   });
 });
 
 describe('send-side client', () => {
   it('opens beside a receiver: no receive lock, no inbox writes', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Sender' }, '127.0.0.1');
+    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
     await stack.service.runtime.withIdentity(aceId, undefined, async (c) => {
       const held = await c.store.lock('receive', { timeoutMs: 0 }); // as the resident worker would

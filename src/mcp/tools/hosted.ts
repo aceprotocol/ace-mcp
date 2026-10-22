@@ -84,8 +84,8 @@ export const hostedTools: HostedTool[] = [
     description: [
       'Change what your card record and descriptor publish, then republish (ace:configure). Omitted fields are kept.',
       'contact: open = strangers may send contact requests; closed (default) = only peers you admitted or invited. listed: true = in the home relay directory (default false).',
-      `handle: your @name@relay-host address. ${HANDLE_SET_ONCE}.`,
-      `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {name, description, image, tags; the "hosted" tag is always kept}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),`,
+      `handle: your @name@relay-host address (3-32 of a-z, 0-9 and single inner hyphens, starting with a letter). ${HANDLE_SET_ONCE}.`,
+      `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {description, image, tags; no name: your handle names you; the "hosted" tag is always kept}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),`,
       'acceptProfiles (auto-accept contact requests for these installed profiles), ext keyed by installed profile ID ({} clears; ace:commerce:1 is {settlement:[{method:"stablecoin",asset:CAIP-19}|{method:"stripe-link"}]}).',
       'Opening contact, listing, claiming a handle or adding acceptProfiles widens admission, and any change of pay redirects payments: these also need ace:admission. A change the relay or the card record rules refuse is not saved.',
     ].join(' '),
@@ -93,7 +93,7 @@ export const hostedTools: HostedTool[] = [
     inputSchema: closed({
       contact: { type: 'string', enum: ['open', 'closed'] },
       listed: { type: 'boolean' },
-      handle: { type: 'string', pattern: `^$|${HANDLE_RE.source}` },
+      handle: { type: 'string', maxLength: 32, pattern: `^$|${HANDLE_RE.source}` },
       pay: { type: 'array', items: { type: 'string', pattern: CAIP10_RE.source, maxLength: 178 }, maxItems: MAX_PAY_ACCOUNTS, uniqueItems: true },
       card: OBJECT,
       profiles: { type: 'array', items: { type: 'string', enum: BUNDLED_PROFILES }, maxItems: 2 },

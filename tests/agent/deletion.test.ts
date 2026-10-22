@@ -33,7 +33,7 @@ async function importElsewhere(a: HostedTestAgent): Promise<void> {
 
 describe('identity deletion', () => {
   it('a tool call in flight during delete cannot re-register, publish or write after the unregister; new calls are refused', async () => {
-    const a = await createIdentity(stack.service, url, 'Racer');
+    const a = await createIdentity(stack.service, url);
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     let entered!: () => void;
@@ -43,7 +43,7 @@ describe('identity deletion', () => {
       entered();
       await gate;
       attempts.push(await settle(c.relay.register(c.identity)));
-      attempts.push(await settle(c.updateSettings(() => defaultSettings('Revived'))));
+      attempts.push(await settle(c.updateSettings(() => defaultSettings())));
       attempts.push(await settle(c.store.write('late.json', new Uint8Array([1]))));
     });
     await inside;
@@ -67,7 +67,7 @@ describe('identity deletion', () => {
   });
 
   it('another replica does not restart the receiver of an identity being deleted, and does not re-register it', async () => {
-    const a = await createIdentity(stack.service, url, 'Replicated');
+    const a = await createIdentity(stack.service, url);
     const other = replica();
     other.workers.start();
     try {
@@ -95,7 +95,7 @@ describe('identity deletion', () => {
   });
 
   it('a failed unregister clears the marker: the identity, its auth and its receivers resume in every process', async () => {
-    const a = await createIdentity(stack.service, url, 'Survivor');
+    const a = await createIdentity(stack.service, url);
     const route = stack.relay.route.bind(stack.relay);
     stack.relay.route = async (method, u, headers, body) => {
       if (u.pathname === '/v1/unregister') throw new Error('relay down');
@@ -119,7 +119,7 @@ describe('identity deletion', () => {
   });
 
   it('delete succeeds when relay answers stale_seq (the identity was imported and re-keyed elsewhere)', async () => {
-    const a = await createIdentity(stack.service, url, 'Imported');
+    const a = await createIdentity(stack.service, url);
     await importElsewhere(a);
     expect(await a.ownerOk('delete', { confirm: 'DELETE' })).toMatchObject({ ok: true, aceId: a.aceId });
     expect(stack.relay.kels.get(a.aceId)?.seq).toBeGreaterThan(1); // the new custodian's registration stays
@@ -128,7 +128,7 @@ describe('identity deletion', () => {
   });
 
   it.each(['kel_conflict', 'identity_conflict'])('delete treats %s from unregister as a registration no longer ours', async (relayCode) => {
-    const a = await createIdentity(stack.service, url, 'Conflicted');
+    const a = await createIdentity(stack.service, url);
     const route = stack.relay.route.bind(stack.relay);
     stack.relay.route = async (method, u, headers, body) => {
       if (u.pathname === '/v1/unregister') throw new ACEError(relayCode as never, 'conflict');
@@ -144,7 +144,7 @@ describe('identity deletion', () => {
   });
 
   it('a receiver that meets stale_seq stops and marks the identity superseded; scans do not restart it', async () => {
-    const a = await createIdentity(stack.service, url, 'Superseded');
+    const a = await createIdentity(stack.service, url);
     const other = replica();
     other.workers.start();
     try {
@@ -166,7 +166,7 @@ describe('identity deletion', () => {
   });
 
   it('a receiver whose superseded mark fails (Redis error) still stops, logs it and leaves no unhandled rejection', async () => {
-    const a = await createIdentity(stack.service, url, 'MarkFails');
+    const a = await createIdentity(stack.service, url);
     const logged: string[] = [];
     const runtime = new AgentRuntime({ redis: stack.redis, vault: stack.service.vault, config: stack.config, fetch: stack.relay.fetch, logger: silent });
     const workers = new AgentWorkers(runtime, stack.service.vault, { error: (_o, msg) => { logged.push(msg); } }, { scanMs: 50, maintainMs: 100 });

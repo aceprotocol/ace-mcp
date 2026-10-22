@@ -31,10 +31,10 @@ function post(f: Record<string, string>, headers: Record<string, string> = {}) {
 function token(f: Record<string, string>) {
   return fetch(`${base}/oauth/token`, { method: 'POST', headers: FORM, body: new URLSearchParams(f).toString() });
 }
-async function authorize(owner?: string) {
+async function authorize(owner?: string, create: Record<string, string> = {}) {
   const v = verifier(), f = fields(v), p = await page(f);
   expect(p.response.status).toBe(200);
-  const r = await post({ ...f, form_nonce: p.nonce!, ...(owner ? { action: 'token', token: owner } : { action: 'create', name: 'Private agent' }) });
+  const r = await post({ ...f, form_nonce: p.nonce!, ...(owner ? { action: 'token', token: owner } : { action: 'create', ...create }) });
   let destination: string;
   if (owner) { expect(r.status).toBe(302); destination = r.headers.get('location')!; }
   else {
@@ -64,6 +64,7 @@ describe('CIMD and OAuth 2.1 consent', () => {
     const p = await page(fields(verifier()));
     expect(p.html).toContain('&lt;Client&gt;'); expect(p.html).toContain('ace:read ace:send ace:connect');
     expect(p.html).toContain('holds the identity keys and can read its messages');
+    expect(p.html).not.toContain('name="name"'); // creating asks for no agent name: a card has none
     expect(p.response.headers.get('x-frame-options')).toBe('DENY');
     expect(p.response.headers.get('cache-control')).toBe('no-store'); expect(p.html).not.toContain('<script');
   });
@@ -71,9 +72,9 @@ describe('CIMD and OAuth 2.1 consent', () => {
     const { owner, exchange } = await authorize();
     const id = await app.vault.resolveToken(owner); expect(id).toBeTruthy();
     // Registered and published, but closed and unlisted: no stranger contact requests, not in the directory.
-    expect(stack.relay.cards.get(id!)?.card).toMatchObject({ contact: 'closed', listed: false, card: { name: 'Private agent', tags: ['hosted'] } });
+    expect(stack.relay.cards.get(id!)?.card).toMatchObject({ contact: 'closed', listed: false, card: { tags: ['hosted'] } });
     expect(stack.relay.cards.get(id!)?.card.handle).toBeUndefined();
-    expect(await (await stack.relay.fetch('https://relay.test/v1/descriptors')).json()).toEqual({ agents: [], cursor: null });
+    expect(await (await stack.relay.fetch('https://relay.test/v1/cards')).json()).toEqual({ cards: [], cursor: null });
     const response = await token(exchange); expect(response.status).toBe(200);
     const credentials = await response.json() as Record<string, unknown>;
     expect(credentials).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'ace:read ace:send ace:connect' });
@@ -81,6 +82,11 @@ describe('CIMD and OAuth 2.1 consent', () => {
     const again = await authorize(owner), other = await (await token(again.exchange)).json() as Record<string, unknown>;
     expect(other.access_token).not.toBe(credentials.access_token);
     expect(await (await token(exchange)).json()).toMatchObject({ error: 'invalid_grant' });
+  });
+  it('creates the identity with a card carrying only the hosted tag', async () => {
+    const { owner } = await authorize();
+    const id = await app.vault.resolveToken(owner);
+    expect(stack.relay.cards.get(id!)?.card.card).toEqual({ tags: ['hosted'] });
   });
   it.each(['code_verifier', 'client_id', 'redirect_uri', 'resource'])('binds and consumes the code when %s is wrong', async key => {
     const { exchange } = await authorize();
@@ -97,7 +103,7 @@ describe('CIMD and OAuth 2.1 consent', () => {
   });
   it('requires a matching single-use form nonce and rejects cross-site submissions', async () => {
     const f = fields(verifier()), p = await page(f);
-    const body = { ...f, action: 'create', name: 'Agent', form_nonce: p.nonce! };
+    const body = { ...f, action: 'create', form_nonce: p.nonce! };
     expect((await post(body, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
     expect((await post({ ...body, state: 'changed' })).status).toBe(400);
     expect((await post(body)).status).toBe(400); // mismatching binding consumes the nonce

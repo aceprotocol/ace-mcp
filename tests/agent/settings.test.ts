@@ -17,15 +17,15 @@ beforeAll(async () => { stack = await createStack(49); url = await startListenin
 afterAll(() => stack?.close());
 
 describe('hosted settings', () => {
-  it('defaults to closed, unlisted, text-only with the hosted tag; validates the card name and tag count', () => {
-    expect(defaultSettings('Agent')).toEqual({ contact: 'closed', listed: false, card: { name: 'Agent', tags: ['hosted'] }, profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] });
-    expect(() => defaultSettings('')).toThrow();
-    expect(() => defaultSettings('bad\u0000name')).toThrow();
-    expect(() => hostedCard({ name: 'A', tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
+  it('defaults to closed, unlisted, text-only with the hosted tag; validates the card (no name) and tag count', () => {
+    expect(defaultSettings()).toEqual({ contact: 'closed', listed: false, card: { tags: ['hosted'] }, profiles: ['text'], manifests: [], acceptProfiles: [], delegations: [], erc8004: [] });
+    expect(() => hostedCard({ name: 'Agent' })).toThrow(/only description, image and tags/);
+    expect(() => hostedCard({ description: 'bad\u0000text' })).toThrow();
+    expect(() => hostedCard({ tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
   });
 
   it('reads settings saved before card records: public is contact open + listed, private is closed + unlisted', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Legacy' }, '127.0.0.1');
+    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
     const read = (legacy: Record<string, unknown>) => stack.service.runtime.withIdentity(aceId, undefined, async (c) => {
       const { contact: _c, listed: _l, ...base } = (await loadSettings(c.store))!;
@@ -42,11 +42,13 @@ describe('hosted settings', () => {
   });
 
   it('settings not saved when publish rejected (the SDK descriptor rules are the only check)', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Strict' }, '127.0.0.1');
+    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
     const saved = await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store));
     const refused = [
       { ...saved!, handle: 'Not A Handle' }, // the handle grammar
+      { ...saved!, handle: 'not_a_handle' },
+      { ...saved!, card: { name: 'Named', tags: ['hosted'] } }, // a card carries no name
       { ...saved!, pay: ['not-caip10'] }, // card record rules
       { ...saved!, acceptProfiles: ['ace:commerce:1'] }, // not installed
       { ...saved!, ext: { 'ace:commerce:1': { settlement: [{ method: 'stripe-link' }] } } }, // ext of an uninstalled profile
@@ -66,13 +68,13 @@ describe('hosted settings', () => {
         return route(method, u, headers, body);
       };
       try {
-        await expect(stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ name: 'Renamed' }) })))).rejects.toThrow();
+        await expect(stack.service.runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ description: 'Renamed' }) })))).rejects.toThrow();
       } finally {
         stack.relay.route = route;
       }
       expect(await stack.service.runtime.withIdentity(aceId, undefined, (c) => loadSettings(c.store))).toEqual(saved);
       if (path === '/v1/card') {
-        expect(stack.relay.cards.get(aceId)!.card.card.name).toBe('Strict');
+        expect(stack.relay.cards.get(aceId)!.card.card).toEqual({ tags: ['hosted'] });
         expect(stack.relay.descriptors.get(aceId)!.descriptor.issuedAt).toBe(descriptorAt);
       }
     }
@@ -90,7 +92,7 @@ describe('concurrent settings changes', () => {
    * load and its write. `vault.load` is held for the client's call only (its settings snapshot is read alongside it).
    */
   async function race(clientArgs: Record<string, unknown>) {
-    const agent = await createIdentity(stack.service, url, 'Racer');
+    const agent = await createIdentity(stack.service, url);
     await agent.ownerOk('configure', { contact: 'open', listed: true, acceptProfiles: ['ace:text:1'] });
     const client: McpTestClient = await connect(url, (await stack.service.grants.create({
       aceId: agent.aceId, ownerHash: sha256Hex(agent.token), clientId: 'c', resource: url, scopes: ['ace:read', 'ace:configure'],
@@ -120,11 +122,11 @@ describe('concurrent settings changes', () => {
     }
   }
 
-  it('a rename-only change merges onto the fresh settings and never restores what the owner tightened', async () => {
-    const { result, saved, published } = await race({ card: { name: 'Renamed' } });
+  it('a card-only change merges onto the fresh settings and never restores what the owner tightened', async () => {
+    const { result, saved, published } = await race({ card: { description: 'Renamed' } });
     expect(result.ok).toBe(true);
-    expect(saved).toMatchObject({ contact: 'closed', listed: false, acceptProfiles: [], card: { name: 'Renamed' } });
-    expect(published).toMatchObject({ contact: 'closed', listed: false, card: { name: 'Renamed' } });
+    expect(saved).toMatchObject({ contact: 'closed', listed: false, acceptProfiles: [], card: { description: 'Renamed' } });
+    expect(published).toMatchObject({ contact: 'closed', listed: false, card: { description: 'Renamed' } });
   });
 
   it('the admission check runs against the fresh settings: re-sending the stale open state needs ace:admission', async () => {
@@ -134,11 +136,11 @@ describe('concurrent settings changes', () => {
   });
 
   it('an owner change outwaits a change in flight, and tool changes stand aside while it waits', async () => {
-    const { identity } = await provisionIdentity(stack.service.deps, { name: 'Owned' }, '127.0.0.1');
+    const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
     const { runtime } = stack.service;
     const k = identityKeys(aceId);
-    const rename = (name: string, owner: boolean) => runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ name }) })), { owner });
+    const rename = (description: string, owner: boolean) => runtime.withIdentity(aceId, undefined, (c) => c.updateSettings((s) => ({ ...s, card: hostedCard({ description }) })), { owner });
     // A change in flight holds the settings lock past the tool calls' 2 s wait.
     await stack.redis.set(`${k.locks}mcp-settings`, 'in-flight', 'PX', 60_000);
     const owner = rename('Owner', true);
@@ -146,8 +148,8 @@ describe('concurrent settings changes', () => {
     await expect(rename('Client', false)).rejects.toMatchObject({ code: 'lock_busy' });
     await new Promise((r) => setTimeout(r, 2_500));
     await stack.redis.del(`${k.locks}mcp-settings`);
-    await expect(owner).resolves.toMatchObject({ card: { name: 'Owner' } });
+    await expect(owner).resolves.toMatchObject({ card: { description: 'Owner' } });
     expect(Number(await stack.redis.get(k.ownerWaiting))).toBe(0);
-    await expect(rename('Client', false)).resolves.toMatchObject({ card: { name: 'Client' } });
+    await expect(rename('Client', false)).resolves.toMatchObject({ card: { description: 'Client' } });
   }, 15_000);
 });
