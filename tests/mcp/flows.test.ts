@@ -145,12 +145,16 @@ describe('two hosted identities through the relay (tool-call receive path)', () 
 
   it('block refuses delivery at the relay; unblock clears it', async () => {
     await alice.client.callOk('ace_network', { action: 'block', peer: bob.aceId });
-    expect(stack.relay.blocks.get(`${alice.aceId}|${bob.aceId}`)).toEqual({ blocked: true, revision: 1 });
+    // revision = max(previous + 1, now) (05 § Blocks)
+    const blocked = stack.relay.blocks.get(`${alice.aceId}|${bob.aceId}`)!;
+    expect(blocked.blocked).toBe(true);
     const sent = await bob.client.callOk('ace_send', { to: alice.aceId, type: 'ace:text:1', body: { message: 'blocked?' } });
     expect(sent).toMatchObject({ status: 'pending', code: 'not_permitted' });
     expect((await bob.client.callOk('ace_outbox', { action: 'abandon', messageId: sent.messageId })).status).toBe('expired');
     await alice.client.callOk('ace_network', { action: 'unblock', peer: bob.aceId });
-    expect(stack.relay.blocks.get(`${alice.aceId}|${bob.aceId}`)).toEqual({ blocked: false, revision: 2 });
+    const unblocked = stack.relay.blocks.get(`${alice.aceId}|${bob.aceId}`)!;
+    expect(unblocked.blocked).toBe(false);
+    expect(unblocked.revision).toBeGreaterThan(blocked.revision);
     expect((await alice.client.callOk('ace_network', { action: 'peers' })).peers.find((p: { aceId: string }) => p.aceId === bob.aceId)).toBeUndefined();
   });
 });
