@@ -104,7 +104,7 @@ export const hostedTools: HostedTool[] = [
     }),
     annotations: WRITE,
     async run(args, { c, has }) {
-      if (args.ext && typeof args.ext === 'object' && Object.hasOwn(args.ext, DELEGATION_PROFILE_ID)) {
+      if (args.ext && Object.hasOwn(args.ext as JSONObject, DELEGATION_PROFILE_ID)) {
         throw new McpToolError('invalid_argument', `ext["${DELEGATION_PROFILE_ID}"] is reserved: attach delegation credentials with ace_delegation`, false);
       }
       const home = c.relay.baseUrl;

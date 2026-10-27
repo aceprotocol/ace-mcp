@@ -1,10 +1,10 @@
-import { ACEError, DELEGATION_PROFILE_ID, type DelegationCredential, type JSONObject } from '@ace-protocol/sdk';
+import { ACEError, type JSONObject } from '@ace-protocol/sdk';
 import { AGENT_TOOLS, type AgentTool } from '@ace-protocol/sdk/tools';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { toolErrorFromACE } from '../../errors.js';
 import { ok, type HostedTool, type ToolCall } from './shared.js';
 import type { Scope } from '../../oauth/grants.js';
-import { publishedProfiles } from '../../agent/settings.js';
+import { liveDelegations, publishedProfiles } from '../../agent/settings.js';
 import { nowSeconds } from '../../clock.js';
 
 /** The SDK's result of `t` as a hosted result, with `extra` members merged in. */
@@ -19,13 +19,12 @@ async function runAgentTool(t: AgentTool, args: JSONObject, call: ToolCall, extr
  */
 function identityExtra({ c }: ToolCall): Record<string, unknown> {
   const s = c.settings, r = c.record;
-  const { ext } = publishedProfiles(s, nowSeconds());
-  const credentials = (ext?.[DELEGATION_PROFILE_ID]?.credentials ?? []) as unknown as DelegationCredential[];
+  const now = nowSeconds(), { ext } = publishedProfiles(s, now);
   return {
     custody: 'hosted', createdAt: r.createdAt, lastUsedAt: r.lastUsedAt,
     ...(r.exportedAt ? { exportedAt: r.exportedAt } : {}), ...(r.supersededAt ? { supersededAt: r.supersededAt } : {}),
     ...(ext ? { ext } : {}),
-    delegations: credentials.map((d) => ({ issuer: d.issuer, expiresAt: d.expiresAt })),
+    delegations: liveDelegations(s, now).map((d) => ({ issuer: d.issuer, expiresAt: d.expiresAt })),
     erc8004: s.erc8004,
   };
 }

@@ -24,7 +24,7 @@ describe('hosted settings', () => {
     expect(() => hostedCard({ tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
   });
 
-  it('publishes live delegation credentials in ext["ace:delegation:1"] with the delegation profile, and nothing while none is live', async () => {
+  it('publishes live delegation credentials in ext["ace:delegation:1"] with the delegation profile installed while any is attached', async () => {
     const [a, b, subject] = await Promise.all([SoftwareIdentity.generate(), SoftwareIdentity.generate(), SoftwareIdentity.generate()]);
     const now = Math.floor(Date.now() / 1000);
     const live = await createDelegationCredential(a, subject.getACEId(), { now, ttl: 600 });
@@ -35,7 +35,8 @@ describe('hosted settings', () => {
     expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [live, expired] }, later)).toEqual({
       profiles: ['text', 'commerce', 'delegation', MANIFEST], ext: { ...ext, [DELEGATION_PROFILE_ID]: { credentials: [live] } },
     });
-    expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [expired] }, later)).toEqual({ profiles: ['text', 'commerce', MANIFEST], ext });
+    // expiry withdraws the credential, not the profile: the installed profiles change only with the saved settings
+    expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [expired] }, later)).toEqual({ profiles: ['text', 'commerce', 'delegation', MANIFEST], ext });
     expect(publishedProfiles(defaultSettings(), now)).toEqual({ profiles: ['text'] });
     // the profile is bundled: installed on its own without credentials, and never twice with them
     expect(publishedProfiles({ ...defaultSettings(), profiles: ['text', 'delegation'] }, now)).toEqual({ profiles: ['text', 'delegation'] });

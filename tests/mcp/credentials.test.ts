@@ -42,6 +42,17 @@ describe('ace_delegation', () => {
     expect(published(subject).profiles.map((p) => p.id)).not.toContain(DELEGATION_PROFILE_ID);
   });
 
+  it('keeps an acceptProfiles entry for ace:delegation:1 valid: detaching the last credential under it is refused', async () => {
+    const { credential } = await issuer.client.callOk('ace_delegation', { action: 'issue', subject: subject.aceId, ttlSeconds: 600 });
+    await subject.client.callOk('ace_delegation', { action: 'attach', credential });
+    await subject.ownerOk('configure', { acceptProfiles: [DELEGATION_PROFILE_ID] });
+    expect(await subject.client.call('ace_delegation', { action: 'detach', issuer: issuer.aceId })).toMatchObject({ ok: false, error: 'invalid_argument' });
+    expect(published(subject).ext).toEqual({ [DELEGATION_PROFILE_ID]: { credentials: [credential] } });
+    await subject.ownerOk('configure', { acceptProfiles: [] });
+    await subject.client.callOk('ace_delegation', { action: 'detach', issuer: issuer.aceId });
+    expect(published(subject).profiles.map((p) => p.id)).not.toContain(DELEGATION_PROFILE_ID);
+  });
+
   it('refuses tampered credentials and credentials of an issuer it cannot look up', async () => {
     const { credential: issued } = await issuer.client.callOk('ace_delegation', { action: 'issue', subject: subject.aceId, ttlSeconds: 600 });
     expect(await subject.client.call('ace_delegation', { action: 'attach', credential: { ...issued, expiresAt: issued.expiresAt + 1 } }))

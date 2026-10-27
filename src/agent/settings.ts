@@ -34,7 +34,8 @@ export interface HostedSettings {
   ext?: Record<string, JSONObject>;
   /**
    * `ace:delegation:1` credentials naming this identity as subject (one per issuer): the live ones are published in
-   * the descriptor's `ext['ace:delegation:1']`, with the delegation profile installed whether or not `profiles` names it.
+   * the descriptor's `ext['ace:delegation:1']`; while any is attached (live or not), the delegation profile is installed
+   * whether or not `profiles` names it, so the installed profiles change only with the saved settings, never by expiry.
    */
   delegations: DelegationCredential[];
   /** Card record: ERC-8004 registrations of this agent (claimed, not proven). */
@@ -44,20 +45,20 @@ export interface HostedSettings {
 const KEY = 'mcp/settings.json';
 
 /** The credentials of `s` still live at `now` (an expired one is not published: its issuer stopped renewing). */
-function liveDelegations(s: HostedSettings, now: number): DelegationCredential[] {
+export function liveDelegations(s: HostedSettings, now: number): DelegationCredential[] {
   return s.delegations.filter((d) => d.expiresAt > now);
 }
 
 /**
  * What `NetworkClient.open` publishes for `s` at `now` beyond the card record's own members: the descriptor `ext` (the
  * settings' `ext` plus `ace:delegation:1` holding the live credentials, when there are any) and the profiles to
- * install (the configured ones, plus the delegation profile while it publishes credentials; it can also be installed
+ * install (the configured ones, plus the delegation profile while credentials are attached; it can also be installed
  * on its own, to send or receive the `ace:delegation:1` hand-over message without credentials).
  */
 export function publishedProfiles(s: HostedSettings, now: number): { profiles: Array<BundledProfile | ProfileManifest>; ext?: Record<string, JSONObject> } {
   const credentials = liveDelegations(s, now);
   const bundled = new Set<BundledProfile>(s.profiles);
-  if (credentials.length) bundled.add('delegation');
+  if (s.delegations.length) bundled.add('delegation');
   const profiles = [...bundled, ...s.manifests];
   if (!credentials.length) return { profiles, ...(s.ext ? { ext: s.ext } : {}) };
   return { profiles, ext: { ...s.ext, [DELEGATION_PROFILE_ID]: { credentials } as unknown as JSONObject } };
