@@ -62,9 +62,9 @@ env:
   # Full reviewed source pins are versioned with this service. Verification and
   # packaging consume the same combination; no external mutable repository variables.
   ACE_SPEC_REPO: aceprotocol/ace-spec
-  ACE_SPEC_SHA: d434e3e9812a9fd045c08e9d84de76f8a9487285
+  ACE_SPEC_SHA: 06941dc2c135cbdb85125e64389cad8c114387c1
   SDK_TS_REPO: aceprotocol/ace-sdk-ts
-  SDK_TS_SHA: 98a74c8c5c072a1ac363bc3a913108699453d5c0
+  SDK_TS_SHA: 3f032e30db218e24229e2e09c42eb2f34ae1a51a
 
 jobs:
   sources:
