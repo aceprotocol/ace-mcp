@@ -22,7 +22,7 @@ describe('prekey seeds are protected like identity seeds', () => {
     expect(storeLayer.toString('latin1')).not.toContain('"seed"');
     // The prekey subkey opens it; the current prekey is the one the published descriptor carries.
     const doc = JSON.parse(new TextDecoder().decode(await prekeyProtector(stack.config.kek, aceId).open(storeLayer)));
-    expect(doc).toMatchObject({ version: 1, current: { id: stack.relay.descriptors.get(aceId)!.descriptor.prekey.id } });
+    expect(doc).toMatchObject({ version: 2, current: { id: stack.relay.descriptors.get(aceId)!.descriptor.prekey.id } });
     // Bound to its identity: another identity's subkey cannot open it.
     await expect(prekeyProtector(stack.config.kek, 'ace:sha256:' + '0'.repeat(64)).open(storeLayer)).rejects.toBeInstanceOf(SealedDataError);
     // Settings are saved for the worker.
