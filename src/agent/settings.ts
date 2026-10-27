@@ -5,7 +5,7 @@ import {
 
 /** The reserved card tag: this service holds the identity's keys. */
 export const HOSTED_TAG = 'hosted';
-export const BUNDLED_PROFILES = ['text', 'commerce'] as const;
+export const BUNDLED_PROFILES = ['text', 'commerce', 'delegation'] as const;
 export type BundledProfile = (typeof BUNDLED_PROFILES)[number];
 
 /**
@@ -34,7 +34,7 @@ export interface HostedSettings {
   ext?: Record<string, JSONObject>;
   /**
    * `ace:delegation:1` credentials naming this identity as subject (one per issuer): the live ones are published in
-   * the descriptor's `ext['ace:delegation:1']` with the delegation profile installed.
+   * the descriptor's `ext['ace:delegation:1']`, with the delegation profile installed whether or not `profiles` names it.
    */
   delegations: DelegationCredential[];
   /** Card record: ERC-8004 registrations of this agent (claimed, not proven). */
@@ -51,11 +51,14 @@ function liveDelegations(s: HostedSettings, now: number): DelegationCredential[]
 /**
  * What `NetworkClient.open` publishes for `s` at `now` beyond the card record's own members: the descriptor `ext` (the
  * settings' `ext` plus `ace:delegation:1` holding the live credentials, when there are any) and the profiles to
- * install (the delegation profile only while it publishes credentials).
+ * install (the configured ones, plus the delegation profile while it publishes credentials; it can also be installed
+ * on its own, to send or receive the `ace:delegation:1` hand-over message without credentials).
  */
-export function publishedProfiles(s: HostedSettings, now: number): { profiles: Array<BundledProfile | 'delegation' | ProfileManifest>; ext?: Record<string, JSONObject> } {
+export function publishedProfiles(s: HostedSettings, now: number): { profiles: Array<BundledProfile | ProfileManifest>; ext?: Record<string, JSONObject> } {
   const credentials = liveDelegations(s, now);
-  const profiles = [...s.profiles, ...(credentials.length ? ['delegation' as const] : []), ...s.manifests];
+  const bundled = new Set<BundledProfile>(s.profiles);
+  if (credentials.length) bundled.add('delegation');
+  const profiles = [...bundled, ...s.manifests];
   if (!credentials.length) return { profiles, ...(s.ext ? { ext: s.ext } : {}) };
   return { profiles, ext: { ...s.ext, [DELEGATION_PROFILE_ID]: { credentials } as unknown as JSONObject } };
 }

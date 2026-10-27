@@ -37,6 +37,25 @@ describe('hosted settings', () => {
     });
     expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [expired] }, later)).toEqual({ profiles: ['text', 'commerce', MANIFEST], ext });
     expect(publishedProfiles(defaultSettings(), now)).toEqual({ profiles: ['text'] });
+    // the profile is bundled: installed on its own without credentials, and never twice with them
+    expect(publishedProfiles({ ...defaultSettings(), profiles: ['text', 'delegation'] }, now)).toEqual({ profiles: ['text', 'delegation'] });
+    expect(publishedProfiles({ ...defaultSettings(), profiles: ['delegation', 'text'], delegations: [live] }, now)).toEqual({
+      profiles: ['delegation', 'text'], ext: { [DELEGATION_PROFILE_ID]: { credentials: [live] } },
+    });
+  });
+
+  it('ace_configure installs the delegation profile without credentials and refuses a user-set ext["ace:delegation:1"]', async () => {
+    const agent = await createIdentity(stack.service, url);
+    try {
+      const configured = await agent.ownerOk('configure', { profiles: ['text', 'delegation'] });
+      expect(JSON.stringify(configured.profiles)).toContain(DELEGATION_PROFILE_ID);
+      const refused = await agent.client.call('ace_configure', { ext: { [DELEGATION_PROFILE_ID]: { credentials: [] } } });
+      expect(refused).toMatchObject({ ok: false, error: 'invalid_argument' });
+      expect(JSON.stringify(refused)).toContain('ace_delegation');
+      expect(await stack.service.runtime.withIdentity(agent.aceId, undefined, (c) => loadSettings(c.store))).not.toHaveProperty('ext');
+    } finally {
+      await agent.client.close();
+    }
   });
 
   it('settings not saved when publish rejected (the SDK descriptor rules are the only check)', async () => {

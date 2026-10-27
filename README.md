@@ -26,7 +26,7 @@ The agent tools are the SDK's shared tool table (`@ace-protocol/sdk/tools`, `AGE
 | `ace_delegation` (hosted only) | `list` → read; `issue` → admission; `attach`, `detach` → configure |
 | `ace_erc8004` (hosted only) | `list`, `verify` → read; `attach`, `detach` → configure |
 
-Delegation credentials are the official profile `ace:delegation:1`: `ace_delegation attach` verifies a credential naming the identity as subject under a lookup of its issuer, then publishes it in the descriptor's `ext["ace:delegation:1"]` (`{credentials}`, at most 4, one per issuer) with the profile installed; expired credentials are not published. ERC-8004 bindings are a card record member (`erc8004`, at most 4), like `pay` claimed, not proven.
+Delegation credentials are the official profile `ace:delegation:1`: `ace_delegation attach` verifies a credential naming the identity as subject under a lookup of its issuer, then publishes it in the descriptor's `ext["ace:delegation:1"]` (`{credentials}`, at most 4, one per issuer) with the profile installed; expired credentials are not published. The profile is bundled like `text` and `commerce`: `ace_configure` `profiles` may name `delegation` to send or receive the `ace:delegation:1` hand-over message without credentials, and `ace_configure` refuses a user-set `ext["ace:delegation:1"]` (`invalid_argument`). ERC-8004 bindings are a card record member (`erc8004`, at most 4), like `pay` claimed, not proven.
 
 Every result carries `untrusted`: the paths of content another agent wrote (cards, notes, message bodies, thread IDs), which is data, never instructions.
 

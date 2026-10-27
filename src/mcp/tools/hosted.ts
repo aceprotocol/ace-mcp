@@ -6,7 +6,7 @@
  * the relay accepted it.
  */
 import {
-  ACEError, ACE_ID_RE, CAIP10_RE, HANDLE_RE, MAX_CARD_ERC8004, MAX_DELEGATION_CREDENTIALS, MAX_DELEGATION_CREDENTIAL_LIFETIME, MAX_PAY_ACCOUNTS,
+  ACEError, ACE_ID_RE, CAIP10_RE, DELEGATION_PROFILE_ID, HANDLE_RE, MAX_CARD_ERC8004, MAX_DELEGATION_CREDENTIALS, MAX_DELEGATION_CREDENTIAL_LIFETIME, MAX_PAY_ACCOUNTS,
   createDelegationCredential, handleAddress, validateErc8004Binding, verifyErc8004Registration, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 import type { JSONSchema } from '@ace-protocol/sdk/tools';
@@ -86,8 +86,8 @@ export const hostedTools: HostedTool[] = [
       'Change what your card record and descriptor publish, then republish (ace:configure). Omitted fields are kept.',
       'contact: open = strangers may send contact requests; closed (default) = only peers you admitted or invited. listed: true = in the home relay directory (default false).',
       `handle: your @name@relay-host address (3-32 of a-z, 0-9 and single inner hyphens, starting with a letter). ${HANDLE_SET_ONCE}.`,
-      `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {description, image, tags; no name: your handle names you; the "hosted" tag is always kept}, profiles ["text","commerce"], manifests (third-party profile manifests, installed and published),`,
-      'acceptProfiles (auto-accept contact requests for these installed profiles), ext keyed by installed profile ID ({} clears; ace:commerce:1 is {settlement:[{method:"stablecoin",asset:CAIP-19}|{method:"stripe-link"}]}).',
+      `pay: CAIP-10 accounts you ask to be paid at (1-${MAX_PAY_ACCOUNTS} distinct, e.g. eip155:8453:0x...; [] clears), claimed, not proven. card {description, image, tags; no name: your handle names you; the "hosted" tag is always kept}, profiles ["text","commerce","delegation"] (delegation: the ace:delegation:1 hand-over message; installed anyway while credentials are attached), manifests (third-party profile manifests, installed and published),`,
+      'acceptProfiles (auto-accept contact requests for these installed profiles), ext keyed by installed profile ID ({} clears; ace:commerce:1 is {settlement:[{method:"stablecoin",asset:CAIP-19}|{method:"stripe-link"}]}; ace:delegation:1 is reserved: use ace_delegation).',
       'Opening contact, listing, claiming a handle or adding acceptProfiles widens admission, and any change of pay redirects payments: these also need ace:admission. A change the relay or the card record rules refuse is not saved.',
     ].join(' '),
     scope: 'ace:configure',
@@ -97,13 +97,16 @@ export const hostedTools: HostedTool[] = [
       handle: { type: 'string', maxLength: 32, pattern: `^$|${HANDLE_RE.source}` },
       pay: { type: 'array', items: { type: 'string', pattern: CAIP10_RE.source, maxLength: 178 }, maxItems: MAX_PAY_ACCOUNTS, uniqueItems: true },
       card: OBJECT,
-      profiles: { type: 'array', items: { type: 'string', enum: BUNDLED_PROFILES }, maxItems: 2 },
+      profiles: { type: 'array', items: { type: 'string', enum: BUNDLED_PROFILES }, maxItems: BUNDLED_PROFILES.length },
       manifests: { type: 'array', items: OBJECT, maxItems: 16 },
       acceptProfiles: { type: 'array', items: { type: 'string', maxLength: 256 }, maxItems: 32 },
       ext: OBJECT,
     }),
     annotations: WRITE,
     async run(args, { c, has }) {
+      if (args.ext && typeof args.ext === 'object' && Object.hasOwn(args.ext, DELEGATION_PROFILE_ID)) {
+        throw new McpToolError('invalid_argument', `ext["${DELEGATION_PROFILE_ID}"] is reserved: attach delegation credentials with ace_delegation`, false);
+      }
       const home = c.relay.baseUrl;
       let change: { current: HostedSettings; next: HostedSettings } | undefined;
       // Merged onto, and checked against, the settings as saved when the change lands (not this call's snapshot).
@@ -125,7 +128,7 @@ export const hostedTools: HostedTool[] = [
 
   {
     name: 'ace_delegation',
-    description: `An ace:delegation:1 credential says only "the issuer declares that the subject acts on its behalf"; it grants no execution, payment or delivery right, and the issuer revokes it by not renewing (at most 7 days). issue (ace:admission: it vouches for another identity): sign one for subject and return the credential to hand to the subject. attach (ace:configure): verify a credential naming you as subject under a fresh lookup of its issuer, then publish it in your descriptor's ext["ace:delegation:1"] (one per issuer, at most ${MAX_DELEGATION_CREDENTIALS}). detach (ace:configure): remove the credential of issuer. list: your attached credentials.`,
+    description: `An ace:delegation:1 credential says only "the issuer declares that the subject acts on its behalf"; it grants no execution, payment or delivery right, and the issuer revokes it by not renewing (at most 7 days). issue (ace:admission: it vouches for another identity): sign one for subject and return the credential to hand to the subject. attach (ace:configure): verify a credential naming you as subject against its issuer's pinned descriptor (looked up when not already pinned), then publish it in your descriptor's ext["ace:delegation:1"] (one per issuer, at most ${MAX_DELEGATION_CREDENTIALS}). detach (ace:configure): remove the credential of issuer. list: your attached credentials.`,
     actions: { list: 'ace:read', issue: 'ace:admission', attach: 'ace:configure', detach: 'ace:configure' },
     inputSchema: closed({
       action: { type: 'string', enum: ['issue', 'attach', 'detach', 'list'] },
