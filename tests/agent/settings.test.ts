@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ProfileManifest } from '@ace-protocol/sdk';
+import { DELEGATION_PROFILE_ID, SoftwareIdentity, createDelegationCredential, type ProfileManifest } from '@ace-protocol/sdk';
 import { createStack, type Stack } from '../helpers/stack.js';
 import { provisionIdentity } from '../../src/identity/provision.js';
-import { defaultSettings, hostedCard, loadSettings } from '../../src/agent/settings.js';
+import { defaultSettings, hostedCard, loadSettings, publishedProfiles } from '../../src/agent/settings.js';
 import { identityKeys } from '../../src/store/keyspace.js';
 import { connect, createIdentity, startListening, type McpTestClient } from '../helpers/client.js';
 import { sha256Hex } from '@ace-protocol/sdk';
@@ -24,6 +24,21 @@ describe('hosted settings', () => {
     expect(() => hostedCard({ tags: Array.from({ length: 10 }, (_, i) => `t${i}`) })).toThrow(/at most 9/);
   });
 
+  it('publishes live delegation credentials in ext["ace:delegation:1"] with the delegation profile, and nothing while none is live', async () => {
+    const [a, b, subject] = await Promise.all([SoftwareIdentity.generate(), SoftwareIdentity.generate(), SoftwareIdentity.generate()]);
+    const now = Math.floor(Date.now() / 1000);
+    const live = await createDelegationCredential(a, subject.getACEId(), { now, ttl: 600 });
+    const expired = await createDelegationCredential(b, subject.getACEId(), { now, ttl: 60 }); // expired at `later`
+    const later = now + 120;
+    const ext = { 'ace:commerce:1': { settlement: [{ method: 'stripe-link' }] } };
+    const base = { ...defaultSettings(), profiles: ['text', 'commerce'] as const, manifests: [MANIFEST], ext };
+    expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [live, expired] }, later)).toEqual({
+      profiles: ['text', 'commerce', 'delegation', MANIFEST], ext: { ...ext, [DELEGATION_PROFILE_ID]: { credentials: [live] } },
+    });
+    expect(publishedProfiles({ ...base, profiles: [...base.profiles], delegations: [expired] }, later)).toEqual({ profiles: ['text', 'commerce', MANIFEST], ext });
+    expect(publishedProfiles(defaultSettings(), now)).toEqual({ profiles: ['text'] });
+  });
+
   it('settings not saved when publish rejected (the SDK descriptor rules are the only check)', async () => {
     const { identity } = await provisionIdentity(stack.service.deps, '127.0.0.1');
     const aceId = identity.getACEId();
@@ -33,6 +48,7 @@ describe('hosted settings', () => {
       { ...saved!, handle: 'not_a_handle' },
       { ...saved!, card: { name: 'Named', tags: ['hosted'] } }, // a card carries no name
       { ...saved!, pay: ['not-caip10'] }, // card record rules
+      { ...saved!, erc8004: [{ agentRegistry: 'eip155:8453:0x8004a169fb4a3325136eb29fa0ceb6d2e539a432', agentId: '01' }] },
       { ...saved!, acceptProfiles: ['ace:commerce:1'] }, // not installed
       { ...saved!, ext: { 'ace:commerce:1': { settlement: [{ method: 'stripe-link' }] } } }, // ext of an uninstalled profile
       { ...saved!, profiles: ['text', 'commerce'] as const, ext: { 'ace:commerce:1': { settlement: [{ method: 'cash' }] } } },

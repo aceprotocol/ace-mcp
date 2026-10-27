@@ -2,7 +2,7 @@
 // `GET /v1/listen` SSE and `POST /v1/unregister`, for the receiver workers. Packet signatures are not checked: the
 // receiving Inbox does that.
 import {
-  ACEError, compareStreamIds, decodePacket, documentDigest, parseAuthHeaders, verifyAuthHeaders, verifyCardBundle, verifyPermit,
+  ACEError, MAX_INBOX_PAGE, compareStreamIds, decodePacket, documentDigest, parseAuthHeaders, verifyAuthHeaders, verifyCardBundle, verifyPermit,
   verifyPublishedAgent, verifyRegistrationRequest, type CardBundle, type KelState, type PublishedAgent, type RelayAuthRequest,
 } from '@ace-protocol/sdk';
 
@@ -187,7 +187,7 @@ export class FakeRelay {
         const d = c.card.listed === true && c.card.home === this.baseUrl ? this.#live(id) : undefined;
         return d !== undefined && (!tag || (c.card.card.tags ?? []).includes(tag)) && (!profile || d.descriptor.profiles.some((p) => p.id === profile));
       }).map(([, c]) => c);
-      return { cards: cards.slice(0, Number(url.searchParams.get('limit') ?? 20)), cursor: null };
+      return { cards: cards.slice(0, Number(url.searchParams.get('limit') ?? MAX_INBOX_PAGE)), cursor: null };
     }
     if (method === 'POST' && path === '/v1/blocks') {
       const owner = this.#auth(headers, { action: 'block', peer: body.peer, blocked: body.blocked, revision: body.revision });

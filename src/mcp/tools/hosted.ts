@@ -1,12 +1,13 @@
 /**
- * The hosted-only tools: what this identity publishes in its card record and descriptor (ace_configure), its delegation credentials (ace_delegation)
- * and its ERC-8004 bindings (ace_erc8004). Each change goes through AgentContext.updateSettings as a function of the
+ * The hosted-only tools: what this identity publishes in its card record and descriptor (ace_configure), its
+ * `ace:delegation:1` credentials (ace_delegation; published in the descriptor's `ext`) and its ERC-8004 bindings
+ * (ace_erc8004; card record members). Each change goes through AgentContext.updateSettings as a function of the
  * settings saved at that moment (under the identity's settings lock): published first, saved only when the SDK and
  * the relay accepted it.
  */
 import {
-  ACEError, ACE_ID_RE, CAIP10_RE, HANDLE_RE, MAX_DELEGATION_LIFETIME, MAX_PAY_ACCOUNTS, createDelegationCredential, handleAddress,
-  validateErc8004Binding, verifyErc8004Registration, type DescriptorDelegation, type JSONObject, type ProfileManifest,
+  ACEError, ACE_ID_RE, CAIP10_RE, HANDLE_RE, MAX_CARD_ERC8004, MAX_DELEGATION_CREDENTIALS, MAX_DELEGATION_CREDENTIAL_LIFETIME, MAX_PAY_ACCOUNTS,
+  createDelegationCredential, handleAddress, validateErc8004Binding, verifyErc8004Registration, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 import type { JSONSchema } from '@ace-protocol/sdk/tools';
 import { McpToolError, closed, need, ok, type HostedTool } from './shared.js';
@@ -124,41 +125,45 @@ export const hostedTools: HostedTool[] = [
 
   {
     name: 'ace_delegation',
-    description: 'A delegation credential says only "the issuer declares that the subject acts on its behalf"; it grants no execution, payment or delivery right, and the issuer revokes it by not renewing (at most 7 days). issue (ace:admission: it vouches for another identity): sign one for subject and return the descriptor entry {kel, credential} to hand to the subject. attach (ace:configure): add an entry naming you as subject to your descriptor (one per issuer, at most 4). detach (ace:configure): remove the entry of issuer. list: your attached entries.',
+    description: `An ace:delegation:1 credential says only "the issuer declares that the subject acts on its behalf"; it grants no execution, payment or delivery right, and the issuer revokes it by not renewing (at most 7 days). issue (ace:admission: it vouches for another identity): sign one for subject and return the credential to hand to the subject. attach (ace:configure): verify a credential naming you as subject under a fresh lookup of its issuer, then publish it in your descriptor's ext["ace:delegation:1"] (one per issuer, at most ${MAX_DELEGATION_CREDENTIALS}). detach (ace:configure): remove the credential of issuer. list: your attached credentials.`,
     actions: { list: 'ace:read', issue: 'ace:admission', attach: 'ace:configure', detach: 'ace:configure' },
     inputSchema: closed({
       action: { type: 'string', enum: ['issue', 'attach', 'detach', 'list'] },
       subject: ACE_ID, issuer: ACE_ID,
-      ttlSeconds: { type: 'integer', minimum: 60, maximum: MAX_DELEGATION_LIFETIME, description: 'issue: lifetime, default 7 days' },
-      entry: closed({ kel: { type: 'array' }, credential: OBJECT }, ['kel', 'credential']),
+      ttlSeconds: { type: 'integer', minimum: 60, maximum: MAX_DELEGATION_CREDENTIAL_LIFETIME, description: 'issue: lifetime, default 7 days' },
+      credential: { ...OBJECT, description: 'attach: the credential {issuer, subject, issuedAt, expiresAt, signature}' },
     }, ['action']),
     annotations: { ...WRITE, idempotentHint: false },
-    async run(args, { c }) {
+    async run(args, { aceId, c }) {
       const now = nowSeconds();
       switch (args.action) {
         case 'issue': {
           const ttl = args.ttlSeconds as number | undefined;
           const credential = await createDelegationCredential(c.identity, need(args.subject as string | undefined, 'subject'), { now, ...(ttl ? { ttl } : {}) });
-          return ok({ entry: { kel: c.identity.getKel(), credential }, expiresAt: credential.expiresAt });
+          return ok({ credential, expiresAt: credential.expiresAt });
         }
         case 'attach': {
-          const entry = need(args.entry, 'entry') as unknown as DescriptorDelegation;
-          // Names us as subject; 01 § Pinning: the issuer KEL is reconciled with our pin for the issuer, when we hold one.
-          const v = await (await c.network()).verifyDelegation(entry);
-          if (v === null) throw new McpToolError('invalid_argument', 'the delegation credential has expired', false);
-          // Entries that merely expired are dropped here (the issuer stopped renewing).
-          await c.updateSettings((s) => ({
-            ...s, delegations: [...s.delegations.filter((d) => d.credential.issuer !== v.issuer && d.credential.expiresAt > now), entry],
-          }));
-          return ok({ issuer: v.issuer, expiresAt: v.credential.expiresAt, status: 'published' });
+          const value = need(args.credential, 'credential');
+          if ((value as JSONObject).subject !== aceId) throw new ACEError('invalid_authorization', 'the credential names another subject');
+          // profiles/delegation.md § Verifying a credential: the issuer is looked up and pinned; a lookup failure is reported as itself.
+          const v = await (await c.network()).verifyDelegation(value);
+          // Credentials that merely expired are dropped here (the issuer stopped renewing).
+          await c.updateSettings((s) => {
+            const kept = s.delegations.filter((d) => d.issuer !== v.issuer && d.expiresAt > now);
+            if (kept.length >= MAX_DELEGATION_CREDENTIALS) {
+              throw new McpToolError('invalid_argument', `a descriptor carries at most ${MAX_DELEGATION_CREDENTIALS} delegation credentials; detach one first`, false);
+            }
+            return { ...s, delegations: [...kept, v] };
+          });
+          return ok({ issuer: v.issuer, expiresAt: v.expiresAt, status: 'published' });
         }
         case 'detach': {
           const issuer = need(args.issuer as string | undefined, 'issuer');
-          await c.updateSettings((s) => ({ ...s, delegations: s.delegations.filter((d) => d.credential.issuer !== issuer) }));
+          await c.updateSettings((s) => ({ ...s, delegations: s.delegations.filter((d) => d.issuer !== issuer) }));
           return ok({ issuer, status: 'published' });
         }
         default: return ok({ delegations: c.settings.delegations.map((d) => ({
-          issuer: d.credential.issuer, issuedAt: d.credential.issuedAt, expiresAt: d.credential.expiresAt, live: d.credential.expiresAt > now,
+          issuer: d.issuer, issuedAt: d.issuedAt, expiresAt: d.expiresAt, live: d.expiresAt > now,
         })) });
       }
     },
@@ -166,11 +171,11 @@ export const hostedTools: HostedTool[] = [
 
   {
     name: 'ace_erc8004',
-    description: 'Bind your descriptor to an on-chain ERC-8004 agent. The binding holds only when both directions exist: your signed descriptor names {agentRegistry (CAIP-10 registry address, e.g. eip155:8453:0x...), agentId (decimal)}, and that agent\'s registration file (tokenURI) lists the service {"name":"ACE","endpoint":"<your ACE ID>"}. attach / detach (ace:configure) edit your descriptor; list shows them; verify checks a registration document you fetched yourself against an ACE ID (this service does not read chains).',
+    description: `Bind your card record to an on-chain ERC-8004 agent. The binding holds only when both directions exist: your signed card record names {agentRegistry (CAIP-10 registry address, e.g. eip155:8453:0x...), agentId (decimal for eip155)}, and that agent's registration file (tokenURI) lists the service {"name":"ACE","endpoint":"<your ACE ID>"}. attach / detach (ace:configure) edit your card record (at most ${MAX_CARD_ERC8004} bindings); list shows them; verify checks a registration document you fetched yourself against an ACE ID (this service does not read chains).`,
     actions: { list: 'ace:read', verify: 'ace:read', attach: 'ace:configure', detach: 'ace:configure' },
     inputSchema: closed({
       action: { type: 'string', enum: ['attach', 'detach', 'list', 'verify'] },
-      agentRegistry: { type: 'string', maxLength: 200 }, agentId: { type: 'string', maxLength: 78 },
+      agentRegistry: { type: 'string', maxLength: 200 }, agentId: { type: 'string', maxLength: 128 },
       registration: { ...OBJECT, description: 'verify: the registration file (JSON object)' },
       aceId: { ...ACE_ID, description: 'verify: the ACE ID to look for (default: yours)' },
     }, ['action']),
@@ -183,6 +188,9 @@ export const hostedTools: HostedTool[] = [
           const binding = validateErc8004Binding({ agentRegistry: args.agentRegistry, agentId: args.agentId });
           const { erc8004 } = await c.updateSettings((s) => {
             const others = s.erc8004.filter((b) => b.agentRegistry !== binding.agentRegistry || b.agentId !== binding.agentId);
+            if (args.action === 'attach' && others.length >= MAX_CARD_ERC8004) {
+              throw new McpToolError('invalid_argument', `a card record carries at most ${MAX_CARD_ERC8004} ERC-8004 bindings; detach one first`, false);
+            }
             return { ...s, erc8004: args.action === 'attach' ? [...others, binding] : others };
           });
           return ok({ erc8004, status: 'published' });

@@ -11,8 +11,9 @@ import { deriveSubkey, kekCipher } from '../identity/kek.js';
 import { RedisStore } from '../store/redis-store.js';
 import { RECEIVER_CHANNEL, identityKeys } from '../store/keyspace.js';
 import {
-  defaultSettings, hostedCard, loadSettings, saveSettings, settingsDigest, type HostedSettings,
+  defaultSettings, hostedCard, loadSettings, publishedProfiles, saveSettings, settingsDigest, type HostedSettings,
 } from './settings.js';
+import { nowSeconds } from '../clock.js';
 
 export interface AgentContext {
   aceId: string;
@@ -188,14 +189,13 @@ export class AgentRuntime {
   /** Open a NetworkClient for `settings`; `receive` takes the identity's inbox. */
   async open(identity: SoftwareIdentity, store: RedisStore, relay: RelayClient, settings: HostedSettings, mode: 'send' | 'receive'): Promise<NetworkClient> {
     const client = await NetworkClient.open({
-      identity, store, relay, receive: mode === 'receive', profiles: [...settings.profiles, ...settings.manifests],
+      identity, store, relay, receive: mode === 'receive', ...publishedProfiles(settings, nowSeconds()),
       vault: new StorePrekeyVault(store, { protect: prekeyProtector(this.#kek, identity.getACEId()) }),
       messageLog: this.#messageLogOptions, // A received message is stored twice until the next Inbox snapshot: its journal entry and the message log.
       checkCapacity: (m) => this.#makeRoom(store, 2 * canonicalStateBytes(m).length),
       card: settings.card, contact: settings.contact, listed: settings.listed, acceptProfiles: settings.acceptProfiles,
       ...(settings.handle ? { handle: settings.handle } : {}), ...(settings.pay ? { pay: settings.pay } : {}),
-      ...(settings.ext ? { ext: settings.ext } : {}),
-      delegations: settings.delegations, erc8004: settings.erc8004,
+      ...(settings.erc8004.length ? { erc8004: settings.erc8004 } : {}),
       foreignRelay: this.#foreignRelay,
     });
     // send() is the one Outbox write: the entry holds the body until the Outbox prunes it.

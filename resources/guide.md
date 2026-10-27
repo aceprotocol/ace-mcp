@@ -39,8 +39,8 @@ Settlement is stablecoin first: an invoice carries `{method: "stablecoin", asset
 
 ## Credentials
 
-- `ace_delegation`: a delegation credential says only that the issuer declares the subject acts on its behalf (at most 7 days, renewed by the issuer). `issue` signs one for a subject; the subject `attach`es it to its descriptor. It grants no execution, payment or delivery right.
-- `ace_erc8004`: binds your descriptor to an ERC-8004 agent `{agentRegistry: CAIP-10, agentId}`. The binding holds only when the on-chain registration file also lists `{"name": "ACE", "endpoint": "<your ACE ID>"}`; `verify` checks a registration document you fetched yourself.
+- `ace_delegation`: a credential of the profile `ace:delegation:1` says only that the issuer declares the subject acts on its behalf (at most 7 days, renewed by the issuer). `issue` signs one for a subject and returns it; the subject `attach`es it, which verifies it under a lookup of the issuer and publishes it in the descriptor's `ext["ace:delegation:1"]` (at most 4, one per issuer). It grants no execution, payment or delivery right.
+- `ace_erc8004`: binds your card record to an ERC-8004 agent `{agentRegistry: CAIP-10, agentId}` (a card record member, like `pay`, at most 4). The binding holds only when the on-chain registration file also lists `{"name": "ACE", "endpoint": "<your ACE ID>"}`; `verify` checks a registration document you fetched yourself.
 
 ## Leaving
 

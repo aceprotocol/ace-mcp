@@ -1,6 +1,6 @@
 import {
-  ACEError, canonicalStateBytes, sha256Hex, validateCard,
-  type ACEStore, type AgentCard, type Contact, type DescriptorDelegation, type Erc8004Binding, type JSONObject, type ProfileManifest,
+  ACEError, DELEGATION_PROFILE_ID, canonicalStateBytes, sha256Hex, validateCard,
+  type ACEStore, type AgentCard, type Contact, type DelegationCredential, type Erc8004Binding, type JSONObject, type ProfileManifest,
 } from '@ace-protocol/sdk';
 
 /** The reserved card tag: this service holds the identity's keys. */
@@ -32,12 +32,33 @@ export interface HostedSettings {
   acceptProfiles: string[];
   /** Descriptor `ext`, keyed by installed profile id. */
   ext?: Record<string, JSONObject>;
-  /** Delegation credentials naming this identity as subject, each with its issuer's KEL. */
-  delegations: DescriptorDelegation[];
+  /**
+   * `ace:delegation:1` credentials naming this identity as subject (one per issuer): the live ones are published in
+   * the descriptor's `ext['ace:delegation:1']` with the delegation profile installed.
+   */
+  delegations: DelegationCredential[];
+  /** Card record: ERC-8004 registrations of this agent (claimed, not proven). */
   erc8004: Erc8004Binding[];
 }
 
 const KEY = 'mcp/settings.json';
+
+/** The credentials of `s` still live at `now` (an expired one is not published: its issuer stopped renewing). */
+function liveDelegations(s: HostedSettings, now: number): DelegationCredential[] {
+  return s.delegations.filter((d) => d.expiresAt > now);
+}
+
+/**
+ * What `NetworkClient.open` publishes for `s` at `now` beyond the card record's own members: the descriptor `ext` (the
+ * settings' `ext` plus `ace:delegation:1` holding the live credentials, when there are any) and the profiles to
+ * install (the delegation profile only while it publishes credentials).
+ */
+export function publishedProfiles(s: HostedSettings, now: number): { profiles: Array<BundledProfile | 'delegation' | ProfileManifest>; ext?: Record<string, JSONObject> } {
+  const credentials = liveDelegations(s, now);
+  const profiles = [...s.profiles, ...(credentials.length ? ['delegation' as const] : []), ...s.manifests];
+  if (!credentials.length) return { profiles, ...(s.ext ? { ext: s.ext } : {}) };
+  return { profiles, ext: { ...s.ext, [DELEGATION_PROFILE_ID]: { credentials } as unknown as JSONObject } };
+}
 
 const bad = (message: string) => new ACEError('invalid_argument', message);
 
